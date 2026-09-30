@@ -1,21 +1,77 @@
 # Uthiram
 
-A small React and Express blood donor matching app. Donor searches use an exact blood-group match and a 20 km radius around New Delhi. Registration collects donor consent and self-reported prescreen answers; only clear self-reports are included in searches.
+**Verified Requests. Willing Donors. Coordinated Action.**
+
+Uthiram is a fictional-data prototype for coordinating verified blood requirements with willing nearby donors. Its central workflow is request submission, coordinator verification, consent-based radius outreach, explicit donor responses, follow-up, and automatic cancellation of outstanding alerts when enough willing responses are recorded.
+
+Uthiram is not a medical authority. A donor response is not confirmation of eligibility or donation. Final eligibility, compatibility, screening, collection, and clinical decisions remain with the authorised hospital or blood bank.
+
+## Features
+
+- Coordinator dashboard with request queue, outreach stages, response counts, approximate coverage map, activity, and community response analytics.
+- Donor dashboard with availability and emergency-alert consent controls, a timed flash alert, and explicit accept/decline actions.
+- Requester tracking view with a status timeline and no donor personal contact information.
+- Four configurable demo stages: 0–5 km for 3 minutes, 5–10 km for 3 minutes, 10–15 km for 4 minutes, and 15–25 km for 5 minutes.
+- Demo controls for creating a fictional emergency, advancing a radius, stopping outreach, and recording fulfilment.
+- FastAPI endpoints, SQLAlchemy models, PostgreSQL migration, JWT role checks, request ownership checks, and audit events.
+
+All people, organisations, localities, requests, and responses shown in the frontend are fictional. Donor location is approximate; phone numbers and exact addresses are never presented.
+
+## Architecture
+
+- `frontend/`: React, TypeScript, Vite, and responsive CSS. The demo workflow runs locally in the browser.
+- `backend/`: FastAPI, JWT authentication, SQLAlchemy, Alembic, and PostgreSQL.
+- `docs/`: workflow and API notes.
+- `docker-compose.yml`: PostgreSQL, MinIO, API, and frontend services.
+
+The frontend demo state is intentionally usable without a database. The backend endpoints persist real workflow records when configured; the frontend currently does not require backend connectivity for the hackathon walkthrough.
 
 ## Run locally
 
-1. Install dependencies from this directory with `npm install`.
-2. Copy `server/.env.example` to `server/.env` and set `MONGO_URI` to your MongoDB connection string.
-3. Start MongoDB, then seed sample records with `npm run seed`.
-4. Start the client and API with `npm run dev`.
-5. Open `http://localhost:5173`.
+### Frontend
 
-The API is available at `http://localhost:5000`; its health welcome route is `/`. Donor registration uses `POST /api/donors/register`, and matching uses `POST /api/match`. The Vite development server proxies `/api` calls to the API. Create a production client bundle with `npm run build`.
+```powershell
+cd frontend
+npm install
+npm run dev
+```
 
-## Request verification demo
+Open `http://localhost:5173/`.
 
-Blood requests can be submitted through the **Request blood** view. They remain `Pending` and are not matched or sent to donors until a reviewer approves them in **Admin review**. In local development, the admin key is `demo-admin`; set `ADMIN_API_KEY` in `server/.env` to override it. Production mode requires an explicit key and has no demo fallback. Do not use the demo key in a deployed environment.
+### API and database
 
-The admin API uses `x-admin-key`: `GET /api/requests/pending`, `PUT /api/requests/:id/approve`, and `PUT /api/requests/:id/reject`. `POST /api/requests` creates a pending request. Approval creates database records for up to three exact-blood-group donor alerts within 20 km; these are simulated only and do not send SMS or place calls. The reviewer workflow is a prototype key gate, not a replacement for authenticated hospital accounts or production RBAC.
+From the repository root, copy `.env.example` to `.env`, then run:
 
-Prescreen status is self-reported and is not a medical eligibility decision. Blood-bank staff must confirm final eligibility, including clinical checks, at donation. Organ donation is outside this prototype's scope.
+```powershell
+docker compose up --build -d
+docker compose exec backend alembic upgrade head
+```
+
+The API is at `http://localhost:8000`; OpenAPI docs are at `http://localhost:8000/docs`.
+
+To run backend tests in an environment with `backend/requirements.txt` installed:
+
+```powershell
+cd backend
+python -m pytest
+```
+
+## Demo walkthrough
+
+1. Open the coordinator overview and select **Simulate emergency**.
+2. Submit the fictional ABC Hospital request to simulate verification and start the first outreach stage.
+3. Use **Advance demo stage** to move outward, or switch to the donor role and accept/decline the alert.
+4. Donor acceptance requires a separate confirmation and does not represent medical eligibility or a completed donation.
+5. Record fulfilment from outreach to stop all remaining alerts.
+
+The frontend clock runs in real time. Use the demo stage control to demonstrate radius expansion without waiting for a full response window.
+
+## Roles and API
+
+Self-registration supports donor and requester accounts; coordinator and administrator roles are provisioned by an authorised administrator. Every coordinator endpoint checks role permissions; requesters can only read or cancel their own requests, and donors can respond only to their own notifications.
+
+The blood API includes donor profile and availability, request create/list/detail, coordinator assignment and verification, outreach start/expand/stop, donor alert inbox and accept/decline, fulfilment/cancellation, and dashboard statistics. See [docs/architecture.md](docs/architecture.md) for lifecycle and endpoint details.
+
+## Environment variables
+
+See `.env.example` for PostgreSQL, CORS, JWT, TOTP, and MinIO development settings. Replace development secrets before any non-local deployment. This prototype is not configured for production use or real patient data.
