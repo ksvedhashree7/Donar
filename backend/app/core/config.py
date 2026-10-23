@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     admin_email: str | None = None
     admin_username: str | None = None
     admin_password: SecretStr | None = None
+    google_maps_api_key: str | None = None
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

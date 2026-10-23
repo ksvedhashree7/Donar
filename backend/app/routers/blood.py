@@ -12,6 +12,7 @@ from app.models import (
     BloodBankStaff,
     BloodDonorMatch,
     BloodDonorProfile,
+    BloodDonorTrackingSession,
     BloodNotification,
     BloodNotificationResponse,
     BloodOrganisation,
@@ -813,6 +814,14 @@ def accept_blood_notification(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Reservation could not be created",
         )
+    request_obj = db.get(BloodRequest, notification.request_id)
+    donor_obj = db.get(BloodDonorProfile, notification.donor_id)
+    if request_obj and donor_obj:
+        from app.services import blood_tracking
+
+        blood_tracking.create_or_get_tracking_session(
+            db, request_obj, reservation, donor_obj
+        )
     db.commit()
     return AcceptNotificationResponse(
         message="Response recorded",
@@ -843,6 +852,18 @@ def cancel_donor_reservation(
     if reservation is None or reservation.request_id != request_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Reservation not found")
     blood_outreach.cancel_reservation(db, reservation_id, user, payload.reason)
+    session = db.scalar(
+        select(BloodDonorTrackingSession).where(
+            BloodDonorTrackingSession.reservation_id == reservation_id
+        )
+    )
+    if session is not None and session.status not in ("ARRIVED", "CANCELLED"):
+        session.status = "CANCELLED"
+        session.stop_reason = payload.reason or "Reservation cancelled"
+        session.stopped_at = datetime.now(timezone.utc)
+        session.current_latitude = None
+        session.current_longitude = None
+        session.current_accuracy_meters = None
     db.commit()
     return MessageResponse(message="Reservation cancelled; outreach has resumed")
 
@@ -1012,6 +1033,20 @@ def cancel_blood_request(
     elif user.role.name == RoleName.GENERAL_DONOR and request.requester_user_id != user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found")
     blood_outreach.stop_outreach(db, request, user, "CANCELLED", "Cancelled by request owner or authorized staff")
+    tracking_sessions = db.scalars(
+        select(BloodDonorTrackingSession).where(
+            BloodDonorTrackingSession.request_id == request.id
+        )
+    ).all()
+    now = datetime.now(timezone.utc)
+    for s in tracking_sessions:
+        if s.status not in ("ARRIVED", "CANCELLED", "STOPPED"):
+            s.status = "CANCELLED"
+            s.stop_reason = "Request cancelled"
+            s.stopped_at = now
+            s.current_latitude = None
+            s.current_longitude = None
+            s.current_accuracy_meters = None
     db.commit()
     return _request_response(request)
 
