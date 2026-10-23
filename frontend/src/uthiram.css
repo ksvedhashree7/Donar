@@ -485,3 +485,77 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+.uth-compatibility-link { margin: 3px 14px 8px; }
+.uth-compatibility-panel { overflow: hidden; }
+.uth-compatibility-panel > .uth-panel-head { padding-bottom: 12px; }
+.uth-compatibility-scroll { max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; }
+.uth-compatibility-table { width: 100%; min-width: 620px; border-collapse: collapse; table-layout: fixed; }
+.uth-compatibility-table caption { padding: 0 14px 9px; color: #71808b; font-size: 9px; text-align: left; }
+.uth-compatibility-table th, .uth-compatibility-table td { min-width: 48px; height: 36px; padding: 6px 4px; border-top: 1px solid #e9edef; color: #60727c; font-size: 10px; text-align: center; }
+.uth-compatibility-table thead th { background: #f8fafb; color: #354d5c; font-weight: 700; }
+.uth-compatibility-table tbody th { background: #f8fafb; color: #354d5c; font-weight: 700; }
+.uth-compatibility-table td[aria-label*="potentially compatible"] { color: #24734e; font-weight: 800; }
+.uth-compatibility-legend, .uth-compatibility-note { margin: 10px 14px; color: #637680; font-size: 9px; line-height: 1.6; }
+.uth-compatibility-note { color: #75858e; }
+
+.uth-account-link { padding: 7px 9px; border: 1px solid #e1e7e9; border-radius: 5px; background: #fff; color: #526571; font-size: 9px; font-weight: 700; }
+.uth-account-link:hover { border-color: #c7d1d5; background: #f8fafb; }
+.uth-account-panel { max-width: 680px; margin: 0 auto; overflow: hidden; }
+.uth-account-panel > .uth-panel-head { padding: 18px 20px 14px; border-bottom: 1px solid #edf0f1; }
+.uth-account-body { padding: 16px 20px 20px; }
+.uth-account-modes { display: flex; gap: 18px; margin-bottom: 16px; border-bottom: 1px solid #e8edef; }
+.uth-account-modes button { position: relative; padding: 0 2px 10px; border: 0; background: transparent; color: #71808b; font-size: 10px; font-weight: 700; }
+.uth-account-modes button.is-active { color: #a32136; }
+.uth-account-modes button.is-active::after { position: absolute; right: 0; bottom: -1px; left: 0; height: 2px; background: #bc263b; content: ''; }
+.uth-account-form { display: grid; gap: 11px; }
+.uth-account-form label { display: grid; gap: 5px; color: #536671; font-size: 9px; font-weight: 700; }
+.uth-account-form input, .uth-account-form select { width: 100%; min-width: 0; height: 36px; padding: 0 9px; border: 1px solid #dfe5e8; border-radius: 5px; background: #fff; color: #354d5c; font-size: 10px; }
+.uth-account-form input::placeholder { color: #a7b0b5; }
+.uth-account-form .uth-form-row { gap: 10px; }
+.uth-account-consent { display: flex !important; align-items: center; gap: 8px !important; color: #536671; font-size: 9px; font-weight: 500 !important; }
+.uth-account-form input[type="checkbox"] { width: 15px; height: 15px; flex: 0 0 auto; margin: 0; accent-color: #24734e; }
+.uth-account-note { margin: 0; color: #75858e; font-size: 9px; line-height: 1.55; }
+.uth-account-privacy { display: flex; align-items: flex-start; gap: 7px; padding: 10px; border: 1px solid #e4eee7; border-radius: 5px; background: #f7faf7; color: #617b68; }
+.uth-account-privacy svg { flex: 0 0 auto; }
+.uth-account-message { margin: 0; padding: 10px; border-radius: 5px; background: #f2f7f3; color: #40694c; font-size: 9px; line-height: 1.5; }
+.uth-account-disclaimer { margin: 14px 0 0; color: #8a989f; font-size: 8px; line-height: 1.5; }
+.uth-availability-panel { margin-bottom: 14px; overflow: hidden; }
+.uth-availability-table { width: 100%; border-collapse: collapse; }
+.uth-availability-table th, .uth-availability-table td { height: 35px; padding: 7px 14px; border-top: 1px solid #edf0f1; color: #647680; font-size: 9px; text-align: left; }
+.uth-availability-table thead th { background: #f8fafb; color: #536671; font-weight: 700; }
+.uth-availability-table tbody th { color: #a72e40; font-weight: 800; }
+.uth-availability-table td:not(:first-child) { text-align: right; }
+.uth-availability-note { margin: 0; padding: 10px 14px 13px; color: #75858e; font-size: 8px; line-height: 1.55; }
+.uth-donor-requests { display: grid; gap: 13px; }
+.uth-bank-requests { display: grid; gap: 13px; }
+.uth-submitted-request { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; padding: 0 18px 12px; }
+.uth-submitted-request > div { display: grid; align-content: start; gap: 5px; }
+.uth-submitted-request > div > span:first-child { color: #84929a; font-size: 8px; }
+.uth-submitted-request > div > strong { overflow-wrap: anywhere; color: #405865; font-size: 9px; }
+.uth-submitted-request > p { grid-column: 1 / -1; margin: 0; color: #75858e; font-size: 8px; line-height: 1.5; }
+.uth-donor-request-empty { margin: 0; padding: 0 18px 16px; color: #75858e; font-size: 9px; }
+.uth-donor-alert-slot { padding: 0 18px 18px; }
+.uth-donor-review { overflow: hidden; }
+.uth-donor-review-details { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); align-items: start; gap: 12px; padding: 0 18px 12px; }
+.uth-donor-review-details > div { display: grid; gap: 5px; }
+.uth-donor-review-details > div > span:first-child { color: #84929a; font-size: 8px; }
+.uth-donor-review-details > div > strong { overflow-wrap: anywhere; color: #405865; font-size: 9px; }
+.uth-donor-review-actions { grid-column: 1 / -1; display: flex !important; flex-direction: row; gap: 8px !important; }
+.uth-donor-review-note { margin: 0; padding: 0 18px 14px; color: #75858e; font-size: 8px; line-height: 1.5; }
+
+@media (max-width: 650px) {
+  .uth-account-link { padding: 6px; font-size: 8px; }
+  .uth-account-panel > .uth-panel-head { padding: 14px 12px 11px; }
+  .uth-account-body { padding: 13px 12px 15px; }
+  .uth-availability-table th, .uth-availability-table td { padding-right: 8px; padding-left: 8px; font-size: 8px; }
+  .uth-availability-table { min-width: 440px; }
+  .uth-donor-requests { gap: 9px; }
+  .uth-bank-requests { gap: 9px; }
+  .uth-submitted-request { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 0 12px 12px; }
+  .uth-donor-request-empty { padding: 0 12px 13px; }
+  .uth-donor-alert-slot { padding: 0 12px 12px; }
+  .uth-donor-review-details { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 0 12px 12px; }
+  .uth-donor-review-actions { flex-wrap: wrap; }
+  .uth-donor-review-note { padding: 0 12px 12px; }
+}

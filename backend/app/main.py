@@ -8,7 +8,6 @@ from app.core.database import SessionFactory
 from app.middleware.audit import AuditMiddleware
 from app.routers.auth import limiter
 from app.routers.auth import router as auth_router
-from app.routers.donors import router as donors_router
 from app.routers.blood import router as blood_router
 
 settings = get_settings()
@@ -29,7 +28,6 @@ app.add_middleware(
 )
 app.add_middleware(AuditMiddleware)
 app.include_router(auth_router)
-app.include_router(donors_router)
 app.include_router(blood_router)
 
 
@@ -40,4 +38,4 @@ def healthcheck() -> dict[str, str]:
 
 @app.get("/")
 def read_root() -> dict[str, str]:
-    return {"message": "Organ Donor Matching Platform API"}
+    return {"message": "Uthiram Blood Coordination API"}

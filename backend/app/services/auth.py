@@ -25,11 +25,20 @@ from app.core.security import (
     verify_password,
     verify_totp,
 )
-from app.models import OtpChallenge, RefreshSession, Role, RoleName, User, UserStatus
-from app.schemas.auth import AuthTokens
+from app.models import (
+    BloodBankStaff,
+    BloodOrganisation,
+    OtpChallenge,
+    RefreshSession,
+    Role,
+    RoleName,
+    User,
+    UserStatus,
+)
+from app.schemas.auth import AuthTokens, BloodBankRegistration
 
 logger = logging.getLogger(__name__)
-OTP_PURPOSES = {"EMAIL_VERIFY", "LOGIN", "PASSWORD_RESET", "TOTP_LOGIN"}
+OTP_PURPOSES = {"EMAIL_VERIFY", "LOGIN", "PASSWORD_RESET", "TOTP_LOGIN", "PHONE_VERIFY"}
 
 
 def issue_challenge(db: Session, user: User, purpose: str) -> OtpChallenge:
@@ -77,15 +86,32 @@ def verify_challenge(db: Session, challenge_id: UUID, code: str, purpose: str) -
 
 
 def register_user(
-    db: Session, *, email: str, password: str, role_name: RoleName, phone: str | None
+    db: Session,
+    *,
+    email: str,
+    password: str,
+    role_name: RoleName,
+    phone: str | None,
+    blood_bank: BloodBankRegistration | None = None,
 ) -> OtpChallenge:
-    if role_name not in {RoleName.DONOR, RoleName.REQUESTER, RoleName.RECIPIENT}:
+    if role_name not in {RoleName.GENERAL_DONOR, RoleName.BLOOD_BANK}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Self-registration is not allowed for this role",
         )
+    if (role_name == RoleName.BLOOD_BANK) != (blood_bank is not None):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Blood bank registration details are required for this role",
+        )
     normalized_email = email.strip().lower()
     if db.scalar(select(User.id).where(User.email == normalized_email)):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Unable to create account")
+    if blood_bank and db.scalar(
+        select(BloodOrganisation.id).where(
+            BloodOrganisation.registration_number == blood_bank.registration_number
+        )
+    ):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Unable to create account")
     role = db.scalar(select(Role).where(Role.name == role_name))
     if role is None:
@@ -104,6 +130,34 @@ def register_user(
     )
     db.add(user)
     db.flush()
+    if blood_bank is not None:
+        organisation = BloodOrganisation(
+            name=blood_bank.institution_name,
+            code=f"UTH-BB-{uuid4().hex[:12].upper()}",
+            institution_type=blood_bank.institution_type,
+            representative_name=blood_bank.representative_name,
+            official_phone=blood_bank.official_phone,
+            address=blood_bank.address,
+            locality=blood_bank.locality,
+            city=blood_bank.city,
+            district=blood_bank.district,
+            state=blood_bank.state,
+            pincode=blood_bank.pincode,
+            registration_number=blood_bank.registration_number,
+            issuing_authority=blood_bank.issuing_authority,
+            license_expires_at=blood_bank.license_expires_at,
+            verification_status="PENDING",
+            is_active=False,
+        )
+        db.add(organisation)
+        db.flush()
+        db.add(
+            BloodBankStaff(
+                user_id=user.id,
+                organisation_id=organisation.id,
+                is_active=True,
+            )
+        )
     return issue_challenge(db, user, "EMAIL_VERIFY")
 
 
@@ -149,6 +203,24 @@ def complete_email_verification(
     tokens, refresh_token = create_token_pair(db, user)
     db.commit()
     return tokens, refresh_token
+
+
+def begin_phone_verification(db: Session, user: User) -> OtpChallenge:
+    if not user.phone:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Add a phone number before verifying it",
+        )
+    return issue_challenge(db, user, "PHONE_VERIFY")
+
+
+def complete_phone_verification(
+    db: Session, user: User, challenge_id: UUID, code: str
+) -> None:
+    challenge = verify_challenge(db, challenge_id, code, "PHONE_VERIFY")
+    if challenge.user_id != user.id or not user.phone:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired code")
+    user.phone_verified_at = datetime.now(timezone.utc)
 
 
 def complete_login_otp(db: Session, challenge_id: UUID, code: str) -> tuple[AuthTokens, str]:

@@ -1,7 +1,8 @@
 from app.models.base import Base
 from app.models.blood import (
+    BloodBankStaff,
     BloodConsent,
-    BloodCoordinator,
+    BloodDonationRecord,
     BloodDonorMatch,
     BloodDonorProfile,
     BloodNotification,
@@ -9,6 +10,7 @@ from app.models.blood import (
     BloodOrganisation,
     BloodOutreachBatch,
     BloodRequest,
+    BloodRequestReservation,
     BloodRequestStatusHistory,
     BloodRequestVerification,
 )
@@ -53,7 +55,8 @@ from app.models.security import OtpChallenge, RefreshSession
 
 __all__ = [
     "BloodConsent",
-    "BloodCoordinator",
+    "BloodBankStaff",
+    "BloodDonationRecord",
     "BloodDonorMatch",
     "BloodDonorProfile",
     "BloodNotification",
@@ -61,6 +64,7 @@ __all__ = [
     "BloodOrganisation",
     "BloodOutreachBatch",
     "BloodRequest",
+    "BloodRequestReservation",
     "BloodRequestStatusHistory",
     "BloodRequestVerification",
     "AccessGrant",

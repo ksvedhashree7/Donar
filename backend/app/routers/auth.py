@@ -56,6 +56,7 @@ def register(
         password=payload.password,
         role_name=payload.role,
         phone=payload.phone,
+        blood_bank=payload.blood_bank,
     )
     db.commit()
     return RegisterResponse(challenge_id=challenge.id)
@@ -118,6 +119,33 @@ def verify_totp_login(
     tokens, refresh_token = auth_service.complete_totp_login(db, payload.challenge_id, payload.code)
     _set_refresh_cookie(response, refresh_token)
     return tokens
+
+
+@router.post("/phone/verify/request", response_model=ChallengeResponse)
+@limiter.limit("5/minute")
+def request_phone_verification(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(require_role(*ALL_ROLES))],
+) -> ChallengeResponse:
+    del request
+    challenge = auth_service.begin_phone_verification(db, user)
+    db.commit()
+    return ChallengeResponse(challenge_id=challenge.id)
+
+
+@router.post("/phone/verify", status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit("8/minute")
+def verify_phone(
+    request: Request,
+    payload: OtpVerifyRequest,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(require_role(*ALL_ROLES))],
+) -> Response:
+    del request
+    auth_service.complete_phone_verification(db, user, payload.challenge_id, payload.code)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/refresh", response_model=AuthTokens)

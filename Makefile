@@ -10,4 +10,4 @@ test:
 	cd backend && python -m pytest
 
 down:
-	docker compose down -v
+	docker compose down

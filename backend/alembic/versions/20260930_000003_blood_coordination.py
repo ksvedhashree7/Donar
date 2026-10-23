@@ -6,7 +6,6 @@ Create Date: 2026-09-30 00:00:00.000000
 """
 
 from alembic import op
-
 from app.models import Base
 
 revision = "20260930_000003"
@@ -16,6 +15,7 @@ depends_on = None
 
 BLOOD_TABLES = {
     "blood_organisations",
+    "blood_bank_staff",
     "blood_coordinators",
     "blood_donors",
     "blood_requests",
@@ -41,3 +41,4 @@ def downgrade() -> None:
     for table in reversed(Base.metadata.sorted_tables):
         if table.name in BLOOD_TABLES:
             table.drop(connection, checkfirst=True)
+    op.execute("DROP TABLE IF EXISTS blood_coordinators")

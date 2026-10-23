@@ -18,7 +18,6 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
-    func,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -27,13 +26,9 @@ from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 
 class RoleName(str, enum.Enum):
-    DONOR = "DONOR"
-    REQUESTER = "REQUESTER"
-    COORDINATOR = "COORDINATOR"
-    RECIPIENT = "RECIPIENT"
-    DOCTOR = "DOCTOR"
-    HOSPITAL_STAFF = "HOSPITAL_STAFF"
     ADMIN = "ADMIN"
+    BLOOD_BANK = "BLOOD_BANK"
+    GENERAL_DONOR = "GENERAL_DONOR"
 
 
 class UserStatus(str, enum.Enum):
@@ -130,6 +125,7 @@ class User(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     totp_secret: Mapped[str | None] = mapped_column(String(255), nullable=True)
     totp_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    phone_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     failed_login_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     lockout_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

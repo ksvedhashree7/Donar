@@ -2,7 +2,6 @@ import logging
 import re
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from uuid import uuid4
 
 import pyotp
 import pytest
@@ -21,23 +20,19 @@ from app.core.security import (
 )
 from app.main import app
 from app.models import (
-    AccessGrant,
     AuditLog,
     Base,
-    Consent,
-    ConsentStatus,
-    Doctor,
-    Donor,
-    FieldVerification,
-    Hospital,
+    BloodBankStaff,
+    BloodDonorProfile,
+    BloodOrganisation,
+    BloodRequest,
+    BloodRequestReservation,
     Role,
     RoleName,
     User,
     UserStatus,
-    VerificationStatus,
 )
 from app.services import auth as auth_service
-from app.services.policies import can_edit_verified_medical, can_view_donor_medical
 
 
 @pytest.fixture
@@ -76,9 +71,13 @@ def test_require_role_allows_only_matching_role(required_role, actor_role) -> No
         assert error.value.status_code == 403
 
 
-def test_recipient_cannot_list_donors(client, session_factory) -> None:
+def test_account_role_model_contains_only_the_three_supported_roles() -> None:
+    assert {role.value for role in RoleName} == {"ADMIN", "BLOOD_BANK", "GENERAL_DONOR"}
+
+
+def test_general_donor_cannot_enumerate_donor_profiles(client, session_factory) -> None:
     with session_factory() as db:
-        role = Role(name=RoleName.RECIPIENT, description="test")
+        role = Role(name=RoleName.GENERAL_DONOR, description="test")
         db.add(role)
         db.flush()
         user = User(
@@ -91,10 +90,12 @@ def test_recipient_cannot_list_donors(client, session_factory) -> None:
         )
         db.add(user)
         db.commit()
-        token = create_access_token(user.id, RoleName.RECIPIENT.value)
+        token = create_access_token(user.id, RoleName.GENERAL_DONOR.value)
 
-    response = client.get("/donors", headers={"Authorization": f"Bearer {token}"})
-    assert response.status_code == 403
+    profile_response = client.get("/donors/profile", headers={"Authorization": f"Bearer {token}"})
+    directory_response = client.get("/donors", headers={"Authorization": f"Bearer {token}"})
+    assert profile_response.status_code == 404
+    assert directory_response.status_code == 404
 
 
 def test_registration_otp_and_refresh_rotation(client, session_factory, caplog) -> None:
@@ -104,7 +105,8 @@ def test_registration_otp_and_refresh_rotation(client, session_factory, caplog) 
         json={
             "email": "donor@example.com",
             "password": "SamplePassword123!",
-            "role": "DONOR",
+            "role": "GENERAL_DONOR",
+            "phone": "+919876543210",
         },
     )
     assert registered.status_code == 201
@@ -143,9 +145,88 @@ def test_registration_otp_and_refresh_rotation(client, session_factory, caplog) 
         )
 
 
+def test_blood_bank_registration_requires_details_and_admin_review(
+    client, session_factory
+) -> None:
+    missing_details = client.post(
+        "/auth/register",
+        json={
+            "email": "bank@example.com",
+            "password": "SamplePassword123!",
+            "role": "BLOOD_BANK",
+        },
+    )
+    assert missing_details.status_code == 422
+    admin_registration = client.post(
+        "/auth/register",
+        json={
+            "email": "admin@example.com",
+            "password": "SamplePassword123!",
+            "role": "ADMIN",
+        },
+    )
+    assert admin_registration.status_code == 422
+
+    registered = client.post(
+        "/auth/register",
+        json={
+            "email": "bank@example.com",
+            "password": "SamplePassword123!",
+            "role": "BLOOD_BANK",
+            "blood_bank": {
+                "institution_name": "Chennai Blood Centre",
+                "institution_type": "Blood centre",
+                "representative_name": "Authorised Representative",
+                "official_phone": "+914400000000",
+                "address": "1 Sample Road",
+                "locality": "Adyar",
+                "city": "Chennai",
+                "district": "Chennai",
+                "state": "Tamil Nadu",
+                "pincode": "600020",
+                "registration_number": "TN-BB-001",
+                "issuing_authority": "State Licensing Authority",
+            },
+        },
+    )
+    assert registered.status_code == 201
+    with session_factory() as db:
+        organisation = db.query(BloodOrganisation).filter_by(name="Chennai Blood Centre").one()
+        bank_user = db.query(User).filter_by(email="bank@example.com").one()
+        association = db.query(BloodBankStaff).filter_by(user_id=bank_user.id).one()
+        assert association.organisation_id == organisation.id
+        assert organisation.verification_status == "PENDING"
+        assert organisation.is_active is False
+
+        admin_role = Role(name=RoleName.ADMIN, description="administrator")
+        db.add(admin_role)
+        db.flush()
+        admin = User(
+            role_id=admin_role.id,
+            username="review-admin",
+            email="review-admin@example.com",
+            password_hash=hash_password("SamplePassword123!"),
+            status=UserStatus.ACTIVE,
+            is_active=True,
+        )
+        db.add(admin)
+        db.commit()
+        admin_token = create_access_token(admin.id, RoleName.ADMIN.value)
+        organisation_id = organisation.id
+
+    reviewed = client.post(
+        f"/admin/blood-banks/{organisation_id}/verification",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={"decision": "VERIFY"},
+    )
+    assert reviewed.status_code == 200
+    assert reviewed.json()["verification_status"] == "VERIFIED"
+    assert reviewed.json()["is_active"] is True
+
+
 def test_failed_logins_lock_account(session_factory) -> None:
     with session_factory() as db:
-        role = Role(name=RoleName.DONOR, description="donor")
+        role = Role(name=RoleName.GENERAL_DONOR, description="donor")
         db.add(role)
         db.flush()
         user = User(
@@ -179,9 +260,147 @@ def test_failed_logins_lock_account(session_factory) -> None:
         assert db.query(User).filter_by(email="locked@example.com").one().failed_login_attempts == 5
 
 
+def test_phone_verification_is_required_before_contact_sharing(client, session_factory, caplog) -> None:
+    caplog.set_level(logging.INFO, logger="app.services.auth")
+    with session_factory() as db:
+        role = Role(name=RoleName.GENERAL_DONOR, description="donor")
+        db.add(role)
+        db.flush()
+        user = User(
+            role_id=role.id,
+            username="phone-user",
+            email="phone@example.com",
+            phone="+919876543210",
+            password_hash=hash_password("SamplePassword123!"),
+            status=UserStatus.ACTIVE,
+            is_active=True,
+            email_verified_at=datetime.now(timezone.utc),
+        )
+        db.add(user)
+        db.commit()
+        token = create_access_token(user.id, RoleName.GENERAL_DONOR.value)
+        user_id = user.id
+
+    headers = {"Authorization": f"Bearer {token}"}
+    requested = client.post("/auth/phone/verify/request", headers=headers)
+    assert requested.status_code == 200
+    challenge_id = requested.json()["challenge_id"]
+    otp_line = next(
+        record.message
+        for record in caplog.records
+        if f"challenge_id={challenge_id}" in record.message
+    )
+    code = re.search(r"code=(\d{6})", otp_line).group(1)
+    verified = client.post(
+        "/auth/phone/verify",
+        headers=headers,
+        json={"challenge_id": challenge_id, "code": code},
+    )
+    assert verified.status_code == 204
+    with session_factory() as db:
+        assert db.get(User, user_id).phone_verified_at is not None
+
+
+def test_donor_contact_is_released_only_to_request_owner_with_consent(
+    client, session_factory
+) -> None:
+    with session_factory() as db:
+        role = Role(name=RoleName.GENERAL_DONOR, description="general donor")
+        db.add(role)
+        db.flush()
+        requester = User(
+            role_id=role.id,
+            username="contact-requester",
+            email="contact-requester@example.com",
+            phone="+919800000001",
+            password_hash="not-used",
+            status=UserStatus.ACTIVE,
+            is_active=True,
+        )
+        donor_user = User(
+            role_id=role.id,
+            username="contact-donor",
+            email="contact-donor@example.com",
+            phone="+919800000002",
+            password_hash="not-used",
+            status=UserStatus.ACTIVE,
+            is_active=True,
+            phone_verified_at=datetime.now(timezone.utc),
+        )
+        other_requester = User(
+            role_id=role.id,
+            username="other-requester",
+            email="other-requester@example.com",
+            phone="+919800000003",
+            password_hash="not-used",
+            status=UserStatus.ACTIVE,
+            is_active=True,
+        )
+        db.add_all((requester, donor_user, other_requester))
+        db.flush()
+        donor_profile = BloodDonorProfile(
+            user_id=donor_user.id,
+            blood_group="O+",
+            locality="Adyar",
+            notification_consent=True,
+            urgent_contact_consent=False,
+        )
+        request = BloodRequest(
+            public_id="UTH-CONTACT-1",
+            requester_user_id=requester.id,
+            facility="Sample Hospital",
+            locality="Adyar",
+            blood_group="O+",
+            required_donors=1,
+            required_by=datetime.now(timezone.utc) + timedelta(hours=1),
+            status="COORDINATION",
+        )
+        db.add_all((donor_profile, request))
+        db.flush()
+        reservation = BloodRequestReservation(
+            request_id=request.id,
+            donor_id=donor_profile.id,
+            unit_number=1,
+            status="ACTIVE",
+            contact_shared=True,
+            reserved_at=datetime.now(timezone.utc),
+            grace_until=datetime.now(timezone.utc) + timedelta(minutes=2),
+        )
+        db.add(reservation)
+        db.commit()
+        request_id = request.id
+        reservation_id = reservation.id
+        requester_token = create_access_token(requester.id, RoleName.GENERAL_DONOR.value)
+        donor_token = create_access_token(donor_user.id, RoleName.GENERAL_DONOR.value)
+        other_token = create_access_token(other_requester.id, RoleName.GENERAL_DONOR.value)
+
+    endpoint = f"/requests/{request_id}/reservations/{reservation_id}/contact"
+    released = client.get(
+        endpoint,
+        headers={"Authorization": f"Bearer {requester_token}"},
+    )
+    unauthorized = client.get(
+        endpoint,
+        headers={"Authorization": f"Bearer {other_token}"},
+    )
+    assert released.status_code == 200
+    assert released.json() == {"phone": "+919800000002"}
+    assert unauthorized.status_code == 404
+
+    revoked = client.post(
+        f"/donors/reservations/{reservation_id}/revoke-contact-sharing",
+        headers={"Authorization": f"Bearer {donor_token}"},
+    )
+    assert revoked.status_code == 200
+    assert client.get(
+        endpoint,
+        headers={"Authorization": f"Bearer {requester_token}"},
+    ).status_code == 403
+
+
 def test_totp_setup_encrypts_secret_and_verifies_code(session_factory) -> None:
     with session_factory() as db:
-        role = Role(name=RoleName.DONOR, description="donor")
+        role = Role(name=RoleName.GENERAL_DONOR, description="donor")
         db.add(role)
         db.flush()
         user = User(
@@ -208,7 +427,7 @@ def test_forgot_password_response_does_not_disclose_account(
 ) -> None:
     caplog.set_level(logging.INFO, logger="app.services.auth")
     with session_factory() as db:
-        role = Role(name=RoleName.DONOR, description="donor")
+        role = Role(name=RoleName.GENERAL_DONOR, description="donor")
         db.add(role)
         db.flush()
         db.add(
@@ -252,98 +471,6 @@ def test_forgot_password_response_does_not_disclose_account(
     )
     assert old_password.status_code == 401
     assert new_password.status_code == 200
-
-
-def test_donor_medical_access_requires_hospital_grant_and_consent(session_factory) -> None:
-    with session_factory() as db:
-        hospital = Hospital(name="Test Hospital", code="TEST", city="Chennai")
-        db.add(hospital)
-        db.flush()
-        doctor_role = Role(name=RoleName.DOCTOR, description="doctor")
-        donor_role = Role(name=RoleName.DONOR, description="donor")
-        db.add_all([doctor_role, donor_role])
-        db.flush()
-        doctor_user = User(
-            role_id=doctor_role.id,
-            username="doctor-user",
-            email="doctor@example.com",
-            password_hash="not-used",
-            status=UserStatus.ACTIVE,
-            is_active=True,
-        )
-        donor_user = User(
-            role_id=donor_role.id,
-            username="donor-user",
-            email="donor2@example.com",
-            password_hash="not-used",
-            status=UserStatus.ACTIVE,
-            is_active=True,
-        )
-        db.add_all([doctor_user, donor_user])
-        db.flush()
-        doctor = Doctor(
-            user_id=doctor_user.id, hospital_id=hospital.id, first_name="Test", last_name="Doctor"
-        )
-        donor = Donor(
-            user_id=donor_user.id,
-            hospital_id=hospital.id,
-            donor_code="DNR-TEST",
-            first_name="Test",
-            last_name="Donor",
-        )
-        db.add_all([doctor, donor])
-        db.flush()
-        db.refresh(doctor_user)
-        db.refresh(donor_user)
-
-        assert not can_view_donor_medical(doctor_user, donor, "medical_evaluation", db)
-        db.add_all(
-            [
-                AccessGrant(
-                    donor_id=donor.id,
-                    granted_to_user_id=doctor_user.id,
-                    purpose="medical_evaluation",
-                    is_active=True,
-                    valid_until=datetime.now(timezone.utc) + timedelta(hours=1),
-                ),
-                Consent(
-                    donor_id=donor.id,
-                    purpose="medical_evaluation",
-                    version=1,
-                    status=ConsentStatus.ACTIVE,
-                    is_withdrawable=True,
-                ),
-            ]
-        )
-        db.flush()
-        assert can_view_donor_medical(doctor_user, donor, "medical_evaluation", db)
-        assert can_view_donor_medical(donor_user, donor, "medical_evaluation", db)
-        assert not can_view_donor_medical(doctor_user, donor, "unknown-purpose", db)
-
-
-def test_admin_cannot_edit_verified_medical_field(session_factory) -> None:
-    with session_factory() as db:
-        admin_role = Role(name=RoleName.ADMIN, description="admin")
-        db.add(admin_role)
-        db.flush()
-        admin = User(
-            role_id=admin_role.id,
-            username="admin-user",
-            email="admin@example.com",
-            password_hash="not-used",
-            status=UserStatus.ACTIVE,
-            is_active=True,
-        )
-        field = FieldVerification(
-            donor_id=uuid4(),
-            field_name="blood_group",
-            value="O+",
-            status=VerificationStatus.VERIFIED,
-        )
-        db.add_all([admin, field])
-        db.flush()
-        db.refresh(admin)
-        assert not can_edit_verified_medical(admin, field, db)
 
 
 def test_password_hash_and_access_token_primitives() -> None:
