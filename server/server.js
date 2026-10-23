@@ -3,6 +3,10 @@ import dotenv from 'dotenv';
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import mongoose from 'mongoose';
+import donorRoutes from './routes/donorRoutes.js';
+import matchRoutes from './routes/matchRoutes.js';
+import requestRoutes from './routes/requestRoutes.js';
 
 dotenv.config();
 
@@ -307,6 +311,9 @@ function getHospitalForUser(userId) {
 
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
+app.use('/api/donors', donorRoutes);
+app.use('/api/matches', matchRoutes);
+app.use('/api/requests', requestRoutes);
 
 app.get('/', (_request, response) => response.json({ name: 'DonorConnect API', status: 'online' }));
 
@@ -734,6 +741,17 @@ app.use((error, _request, response, _next) => {
   response.status(500).json({ success: false, message: 'Unanticipated error. Please try again.' });
 });
 
+if (process.env.MONGO_URI) {
+  mongoose.connect(process.env.MONGO_URI)
+    .then(() => console.log('MongoDB connected for request verification workflows.'))
+    .catch((error) => console.error('MongoDB connection failed:', error.message));
+}
+
 ensureDemoUsers();
-app.listen(port, () => console.log(`DonorConnect API listening on port ${port}`));
+
+export default app;
+
+if (process.env.NODE_ENV !== 'test') {
+  app.listen(port, () => console.log(`DonorConnect API listening on port ${port}`));
+}
 
