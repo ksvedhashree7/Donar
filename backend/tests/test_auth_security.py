@@ -145,6 +145,81 @@ def test_registration_otp_and_refresh_rotation(client, session_factory, caplog) 
         )
 
 
+def test_admin_username_login_and_role_mismatch(client, session_factory, caplog) -> None:
+    caplog.set_level(logging.INFO, logger="app.services.auth")
+    assert client.get("/auth/session").status_code == 401
+    with session_factory() as db:
+        admin_role = Role(name=RoleName.ADMIN, description="administrator")
+        donor_role = Role(name=RoleName.GENERAL_DONOR, description="donor")
+        db.add_all([admin_role, donor_role])
+        db.flush()
+        admin = User(
+            role_id=admin_role.id,
+            username="admin-seed",
+            email="admin-seed@example.com",
+            password_hash=hash_password("SamplePassword123!"),
+            status=UserStatus.ACTIVE,
+            is_active=True,
+            email_verified_at=datetime.now(timezone.utc),
+        )
+        donor = User(
+            role_id=donor_role.id,
+            username="donor-seed",
+            email="donor-seed@example.com",
+            password_hash=hash_password("SamplePassword123!"),
+            status=UserStatus.ACTIVE,
+            is_active=True,
+            email_verified_at=datetime.now(timezone.utc),
+        )
+        db.add_all([admin, donor])
+        db.commit()
+
+    login = client.post(
+        "/auth/login",
+        json={
+            "username": "admin-seed",
+            "password": "SamplePassword123!",
+            "role": "ADMIN",
+        },
+    )
+    assert login.status_code == 200
+    challenge_id = login.json()["challenge_id"]
+    otp_line = next(record.message for record in caplog.records if "Mock OTP" in record.message)
+    otp_code = re.search(r"code=(\d{6})", otp_line).group(1)
+    verified = client.post(
+        "/auth/otp/verify",
+        json={"challenge_id": challenge_id, "code": otp_code},
+    )
+    assert verified.status_code == 200
+    assert verified.json()["access_token"]
+    session_response = client.get(
+        "/auth/session",
+        headers={"Authorization": f"Bearer {verified.json()['access_token']}"},
+    )
+    assert session_response.status_code == 200
+    assert session_response.json() == {"role": "ADMIN"}
+
+    email_login = client.post(
+        "/auth/login",
+        json={
+            "email": "donor-seed@example.com",
+            "password": "SamplePassword123!",
+            "role": "GENERAL_DONOR",
+        },
+    )
+    assert email_login.status_code == 200
+
+    mismatched_role = client.post(
+        "/auth/login",
+        json={
+            "email": "donor-seed@example.com",
+            "password": "SamplePassword123!",
+            "role": "ADMIN",
+        },
+    )
+    assert mismatched_role.status_code == 401
+
+
 def test_blood_bank_registration_requires_details_and_admin_review(
     client, session_factory
 ) -> None:

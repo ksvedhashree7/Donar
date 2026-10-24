@@ -12,6 +12,7 @@ from app.core.dependencies import require_role
 from app.models import OtpChallenge, RoleName, User
 from app.schemas.auth import (
     AuthTokens,
+    AuthenticatedSession,
     ChallengeResponse,
     ForgotPasswordRequest,
     LoginChallengeResponse,
@@ -28,6 +29,13 @@ from app.services import auth as auth_service
 router = APIRouter(prefix="/auth", tags=["auth"])
 limiter = Limiter(key_func=get_remote_address)
 ALL_ROLES = tuple(RoleName)
+
+
+@router.get("/session", response_model=AuthenticatedSession)
+def read_session(
+    user: Annotated[User, Depends(require_role(*ALL_ROLES))],
+) -> AuthenticatedSession:
+    return AuthenticatedSession(role=user.role.name)
 
 
 def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
@@ -52,7 +60,7 @@ def register(
 ) -> RegisterResponse:
     challenge = auth_service.register_user(
         db,
-        email=str(payload.email),
+        email=str(payload.email) if payload.email is not None else None,
         password=payload.password,
         role_name=payload.role,
         phone=payload.phone,
@@ -71,7 +79,9 @@ def login(
 ) -> LoginChallengeResponse:
     user, challenge = auth_service.authenticate_password(
         db,
-        email=str(payload.email),
+        email=str(payload.email) if payload.email is not None else None,
+        username=payload.username,
+        expected_role=payload.role,
         password=payload.password,
     )
     return LoginChallengeResponse(

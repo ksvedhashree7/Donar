@@ -4,7 +4,7 @@
 
 The canonical application coordinates fictional blood requests and willing donors. It is not a medical authority: blood-group filtering and donor responses do not establish eligibility, compatibility, collection, or a completed donation. Use mock data only. Clinical screening and collection decisions remain with authorised professionals.
 
-The canonical API has three roles: `ADMIN`, `BLOOD_BANK`, and `GENERAL_DONOR`. The React dashboard remains a separate fictional-data demo and does not authenticate against or call this API. Its role-specific sign-in and registration forms are previews only; registration data is not saved and credentials are not verified. Donors can submit a browser-only blood request and view its demo status separately from incoming donor alerts. A blood bank can accept a donor-submitted request for coordination or decline it; acceptance does not verify the request, and administrator verification remains required before outreach. The bank's decision is shown on the donor's request page. These demo requests and decisions are not sent to the API. The blood-bank overview shows illustrative aggregate blood-group counts only and exposes no donor contact directory. Donor contact details remain reservation-specific and subject to consent, phone verification, authorization, and revocation. Other projects in the repository are separate legacy applications.
+The canonical API has three roles: `ADMIN`, `BLOOD_BANK`, and `GENERAL_DONOR`. The React site opens at account access and uses this API for registration and sign-in: administrators use their provisioned username, donors and blood banks use email, and login completes through the configured OTP or TOTP challenge. An HTTP-only refresh cookie restores a signed-in session after reload; the access token is held only in memory. The API's `/auth/session` endpoint returns the role associated with the authenticated token. Administrator accounts cannot self-register, and new blood-bank organisations remain pending until verified by an administrator. After sign-in, the dashboard remains a fictional-data demo and is not an authorization boundary or operational workflow. Donors can submit a browser-only blood request and view its demo status separately from incoming donor alerts. A blood bank can accept a donor-submitted request for coordination or decline it; acceptance does not verify the request, and administrator verification remains required before outreach. The bank's decision is shown on the donor's request page. These demo requests and decisions are not sent to the API. The blood-bank overview shows illustrative aggregate blood-group counts only and exposes no donor contact directory. Donor contact details remain reservation-specific and subject to consent, phone verification, authorization, and revocation. Other projects in the repository are separate legacy applications.
 
 ## Request lifecycle
 
@@ -58,7 +58,9 @@ Donor phone numbers are not included in match or request responses. A donor may 
 
 | Method | Path | Access |
 | --- | --- | --- |
-| `POST` | `/auth/register`, `/auth/login` | Public; registration supports donors and blood banks |
+| `POST` | `/auth/register`, `/auth/login`, `/auth/forgot-password`, `/auth/reset-password` | Public; registration supports donors and blood banks; admins cannot self-register |
+| `POST` | `/auth/refresh`, `/auth/logout` | Refresh cookie; logout also requires a valid access token |
+| `GET` | `/auth/session` | Authenticated account; returns its role |
 | `POST` | `/auth/phone/verify/request`, `/auth/phone/verify` | Authenticated account |
 | `GET` | `/compatibility/rbc` | Public static RBC rule table; contains no donor data |
 | `GET` | `/blood-banks/verified` | Public list of institution names and approximate localities for donor selection |

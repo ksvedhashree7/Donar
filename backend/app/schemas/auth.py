@@ -45,8 +45,18 @@ class RegisterRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    email: EmailStr | None = None
+    username: str | None = Field(default=None, min_length=2, max_length=100)
+    role: RoleName | None = None
     password: str = Field(min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def validate_login_identifier(self) -> "LoginRequest":
+        if (self.email is None) == (self.username is None):
+            raise ValueError("Provide exactly one email address or username")
+        if self.username is not None and self.role != RoleName.ADMIN:
+            raise ValueError("Username login is reserved for administrators")
+        return self
 
 
 class OtpVerifyRequest(BaseModel):
@@ -66,6 +76,10 @@ class AuthTokens(BaseModel):
     access_token: str
     token_type: str = "bearer"
     expires_in: int
+
+
+class AuthenticatedSession(BaseModel):
+    role: RoleName
 
 
 class ChallengeResponse(BaseModel):

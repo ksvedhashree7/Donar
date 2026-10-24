@@ -161,11 +161,27 @@ def register_user(
     return issue_challenge(db, user, "EMAIL_VERIFY")
 
 
-def authenticate_password(db: Session, *, email: str, password: str) -> tuple[User, OtpChallenge]:
+def authenticate_password(
+    db: Session,
+    *,
+    password: str,
+    email: str | None = None,
+    username: str | None = None,
+    expected_role: RoleName | None = None,
+) -> tuple[User, OtpChallenge]:
     settings = get_settings()
-    user = db.scalar(
-        select(User).options(joinedload(User.role)).where(User.email == email.strip().lower())
+    if (email is None) == (username is None):
+        raise ValueError("Provide exactly one email address or username")
+    if username is not None and expected_role != RoleName.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
+        )
+    identity_filter = (
+        User.email == email.strip().lower()
+        if email is not None
+        else User.username == username.strip()
     )
+    user = db.scalar(select(User).options(joinedload(User.role)).where(identity_filter))
     if (
         user is not None
         and user.lockout_until
@@ -180,6 +196,8 @@ def authenticate_password(db: Session, *, email: str, password: str) -> tuple[Us
                     minutes=settings.login_lockout_minutes
                 )
             db.commit()
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    if expected_role is not None and user.role.name != expected_role:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     if not user.is_active or user.status != UserStatus.ACTIVE or user.email_verified_at is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")

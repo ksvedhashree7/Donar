@@ -1,10 +1,11 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import DonationJourneyPanel from './components/DonationJourneyPanel';
 import TrackDonorSection from './components/TrackDonorSection';
+import { registerAccount, requestPasswordReset, resetPassword, startLogin, verifyChallenge, type AuthChallengePurpose, type AuthRole } from './auth-client';
 
 type Role = 'Admin' | 'Blood Bank' | 'Donor';
 type AccountMode = 'login' | 'register';
-type Screen = 'Overview' | 'Requests' | 'Outreach' | 'Donors' | 'Analytics' | 'Notifications' | 'Compatibility' | 'Account';
+type Screen = 'Overview' | 'Requests' | 'Outreach' | 'Donors' | 'Donation report' | 'Notifications' | 'Account';
 type AlertStatus = 'Waiting' | 'Accepted' | 'Declined' | 'No response' | 'Cancelled';
 
 type DonorAlert = {
@@ -40,24 +41,6 @@ const stageRanges = [
   { range: 'Beyond 20 km', duration: 120 },
 ];
 
-const bloodGroups = ['O-', 'O+', 'A-', 'A+', 'B-', 'B+', 'AB-', 'AB+'];
-type RbcCompatibilityMap = Record<string, string[]>;
-
-function isRbcCompatibilityMap(value: unknown): value is RbcCompatibilityMap {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
-  const matrix = value as Record<string, unknown>;
-  if (Object.keys(matrix).length !== bloodGroups.length) return false;
-  return bloodGroups.every((recipientGroup) => {
-    const donors = matrix[recipientGroup];
-    return Array.isArray(donors)
-      && new Set(donors).size === donors.length
-      && donors.every((donorGroup) => typeof donorGroup === 'string' && bloodGroups.includes(donorGroup));
-  });
-}
-
-const donorRbcRecipientGroups = (donorGroup: string, compatibility: RbcCompatibilityMap) =>
-  bloodGroups.filter((recipientGroup) => compatibility[recipientGroup]?.includes(donorGroup));
-
 const initialDonors: DonorAlert[] = [
   { id: 'DNR-1024', initials: 'AK', blood: 'O+', distance: 3.2, locality: 'Adyar', lastConfirmed: '12 min ago', stage: 0, status: 'Waiting' },
   { id: 'DNR-1088', initials: 'SM', blood: 'O+', distance: 4.6, locality: 'Besant Nagar', lastConfirmed: '28 min ago', stage: 0, status: 'Declined' },
@@ -67,14 +50,38 @@ const initialDonors: DonorAlert[] = [
   { id: 'DNR-1236', initials: 'TS', blood: 'O+', distance: 18.2, locality: 'Nungambakkam', lastConfirmed: 'Today, 7:55 AM', stage: 3, status: 'Waiting' },
 ];
 
+const demoDonorProfiles: Record<string, {
+  name: string;
+  dateOfBirth: string;
+  gender: string;
+  district: string;
+  state: string;
+  email: string;
+  contactAccess?: { reservationId: string; donorOptedIn: boolean; phoneVerified: boolean };
+}> = {
+  'DNR-1024': {
+    name: 'Ananya Kumar',
+    dateOfBirth: '14 June 1995',
+    gender: 'Female',
+    district: 'Chennai',
+    state: 'Tamil Nadu',
+    email: 'ananya.kumar@example.invalid',
+    contactAccess: { reservationId: 'UTH-1024', donorOptedIn: true, phoneVerified: true },
+  },
+  'DNR-1088': { name: 'Sanjay Menon', dateOfBirth: '02 February 1992', gender: 'Male', district: 'Chennai', state: 'Tamil Nadu', email: 'sanjay.menon@example.invalid' },
+  'DNR-1103': { name: 'Ravi Varma', dateOfBirth: '23 September 1988', gender: 'Male', district: 'Chennai', state: 'Tamil Nadu', email: 'ravi.varma@example.invalid' },
+  'DNR-1182': { name: 'Priya Krishnan', dateOfBirth: '07 April 1997', gender: 'Female', district: 'Chennai', state: 'Tamil Nadu', email: 'priya.krishnan@example.invalid' },
+  'DNR-1211': { name: 'Jaya Nair', dateOfBirth: '19 December 1990', gender: 'Female', district: 'Chennai', state: 'Tamil Nadu', email: 'jaya.nair@example.invalid' },
+  'DNR-1236': { name: 'Tarun Shah', dateOfBirth: '30 August 1994', gender: 'Male', district: 'Chennai', state: 'Tamil Nadu', email: 'tarun.shah@example.invalid' },
+};
+
 const navItems: { label: Screen; icon: string }[] = [
   { label: 'Overview', icon: 'grid' },
   { label: 'Requests', icon: 'drop' },
   { label: 'Outreach', icon: 'radio' },
   { label: 'Donors', icon: 'users' },
-  { label: 'Analytics', icon: 'chart' },
+  { label: 'Donation report', icon: 'chart' },
   { label: 'Notifications', icon: 'bell' },
-  { label: 'Compatibility', icon: 'drop' },
 ];
 
 function Icon({ name, size = 18 }: { name: string; size?: number }) {
@@ -109,19 +116,174 @@ function Status({ children, tone = 'neutral' }: { children: React.ReactNode; ton
   return <span className={`uth-status uth-status-${tone}`}><i />{children}</span>;
 }
 
-function AccountAccess({ role, mode, message, onRoleChange, onModeChange, onSubmit }: { role: Role; mode: AccountMode; message: string; onRoleChange: (role: Role) => void; onModeChange: (mode: AccountMode) => void; onSubmit: () => void }) {
+function toAuthRole(role: Role): AuthRole {
+  if (role === 'Admin') return 'ADMIN';
+  if (role === 'Blood Bank') return 'BLOOD_BANK';
+  return 'GENERAL_DONOR';
+}
+
+function PasscodeField({ label, name, autoComplete, minLength, maxLength }: { label: string; name: string; autoComplete: string; minLength?: number; maxLength?: number }) {
+  const [isVisible, setIsVisible] = useState(false);
+  const toggleLabel = `${isVisible ? 'Hide' : 'Show'} ${label.toLowerCase()}`;
+
+  return <label>{label}
+    <span className="uth-passcode-input">
+      <input required name={name} type={isVisible ? 'text' : 'password'} autoComplete={autoComplete} minLength={minLength} maxLength={maxLength} />
+      <button type="button" className="uth-passcode-toggle" aria-label={toggleLabel} aria-pressed={isVisible} onClick={() => setIsVisible(!isVisible)}>{isVisible ? 'Hide' : 'Show'}</button>
+    </span>
+  </label>;
+}
+
+function AccountAccess({ role, mode, onRoleChange, onModeChange, onAuthenticated }: { role: Role; mode: AccountMode; onRoleChange: (role: Role) => void; onModeChange: (mode: AccountMode) => void; onAuthenticated: (role: Role, accessToken: string) => void }) {
   const registering = mode === 'register';
+  const [challenge, setChallenge] = useState<{ id: string; purpose: AuthChallengePurpose; role: Role } | null>(null);
+  const [message, setMessage] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [resetMode, setResetMode] = useState(false);
+  const [resetChallengeId, setResetChallengeId] = useState<string | null>(null);
+
+  async function submitCredentials(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setMessage('');
+    setIsSubmitting(true);
+    try {
+      const form = new FormData(event.currentTarget);
+      if (registering) {
+        const password = String(form.get('password') ?? '');
+        if (password !== String(form.get('password_confirmation') ?? '')) {
+          throw new Error('The passcodes do not match.');
+        }
+        if (!form.get('privacy_consent')) {
+          throw new Error('Please agree to the privacy notice and account terms.');
+        }
+        const email = String(form.get('email') ?? '');
+        const phone = String(form.get('phone') ?? '');
+        const payload = role === 'Blood Bank'
+          ? {
+            email,
+            phone,
+            password,
+            role: 'BLOOD_BANK' as const,
+            blood_bank: {
+              institution_name: String(form.get('institution_name') ?? ''),
+              institution_type: 'Blood bank',
+              representative_name: String(form.get('representative_name') ?? ''),
+              official_phone: phone,
+              address: String(form.get('address') ?? ''),
+              locality: String(form.get('locality') ?? ''),
+              city: String(form.get('city') ?? ''),
+              district: String(form.get('district') ?? ''),
+              state: String(form.get('state') ?? ''),
+              pincode: String(form.get('pincode') ?? ''),
+              registration_number: String(form.get('registration_number') ?? ''),
+              issuing_authority: String(form.get('issuing_authority') ?? ''),
+            },
+          }
+          : { email, phone, password, role: 'GENERAL_DONOR' as const };
+        const result = await registerAccount(payload);
+        setChallenge({ id: result.challenge_id, purpose: 'EMAIL_VERIFY', role });
+        setMessage('Account created. Enter the email verification code to finish registration.');
+      } else {
+        const password = String(form.get('password') ?? '');
+        const result = await startLogin(role === 'Admin'
+          ? { username: String(form.get('username') ?? ''), password, role: 'ADMIN' }
+          : { email: String(form.get('email') ?? ''), password, role: toAuthRole(role) });
+        const purpose: AuthChallengePurpose = result.requires_totp ? 'TOTP_LOGIN' : 'LOGIN';
+        setChallenge({ id: result.challenge_id, purpose, role });
+        setMessage(result.requires_totp
+          ? 'Enter the code from your authenticator app.'
+          : 'Enter the one-time verification code to finish signing in.');
+      }
+    } catch (error: unknown) {
+      setMessage(error instanceof Error ? error.message : 'Unable to complete the account request.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  async function submitVerification(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!challenge) return;
+    setMessage('');
+    setIsSubmitting(true);
+    try {
+      const form = new FormData(event.currentTarget);
+      const tokens = await verifyChallenge(challenge.id, String(form.get('code') ?? ''), challenge.purpose);
+      onAuthenticated(challenge.role, tokens.access_token);
+    } catch (error: unknown) {
+      setMessage(error instanceof Error ? error.message : 'Unable to verify the code.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  async function submitPasswordResetRequest(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setMessage('');
+    setIsSubmitting(true);
+    try {
+      const form = new FormData(event.currentTarget);
+      const result = await requestPasswordReset(String(form.get('email') ?? ''));
+      setResetChallengeId(result.challenge_id);
+      setMessage('If the account can be recovered, a verification code will be sent to its registered email.');
+    } catch (error: unknown) {
+      setMessage(error instanceof Error ? error.message : 'Unable to request a password reset.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  async function submitPasswordReset(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!resetChallengeId) return;
+    setMessage('');
+    setIsSubmitting(true);
+    try {
+      const form = new FormData(event.currentTarget);
+      const password = String(form.get('password') ?? '');
+      if (password !== String(form.get('password_confirmation') ?? '')) {
+        throw new Error('The passcodes do not match.');
+      }
+      await resetPassword(resetChallengeId, String(form.get('code') ?? ''), password);
+      setResetMode(false);
+      setResetChallengeId(null);
+      setMessage('Passcode updated. Sign in with your new passcode.');
+    } catch (error: unknown) {
+      setMessage(error instanceof Error ? error.message : 'Unable to reset the passcode.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
 
   return <section className="uth-panel uth-account-panel">
     <div className="uth-panel-head">
-      <div><span className="uth-section-label">DEMO ACCOUNT FLOW</span><h2>{registering ? 'Create a profile preview' : 'Sign in to a workspace'}</h2><p>This browser-only demo does not authenticate or save account details.</p></div>
+      <div><span className="uth-section-label">SECURE ACCOUNT ACCESS</span><h2>{challenge ? 'Verify your account' : registering ? 'Create an account' : 'Sign in to a workspace'}</h2><p>Sign-in and registration requests are verified by the Uthiram API.</p></div>
     </div>
     <div className="uth-account-body">
-      <div className="uth-account-modes" role="tablist" aria-label="Account action">
-        <button type="button" role="tab" aria-selected={!registering} className={!registering ? 'is-active' : ''} onClick={() => onModeChange('login')}>Sign in</button>
-        <button type="button" role="tab" aria-selected={registering} className={registering ? 'is-active' : ''} onClick={() => onModeChange('register')}>Register</button>
-      </div>
-      <form className="uth-account-form" onSubmit={(event) => { event.preventDefault(); onSubmit(); }}>
+      {resetMode ? resetChallengeId
+        ? <form className="uth-account-form" onSubmit={submitPasswordReset}>
+          <p className="uth-account-note">Enter the one-time code sent by the configured verification provider and choose a new passcode.</p>
+          <label>Verification code<input required name="code" inputMode="numeric" pattern="[0-9]{6}" minLength={6} maxLength={6} autoComplete="one-time-code" /></label>
+          <PasscodeField label="New passcode" name="password" autoComplete="new-password" minLength={12} maxLength={128} />
+          <PasscodeField label="Confirm new passcode" name="password_confirmation" autoComplete="new-password" minLength={12} maxLength={128} />
+          {message && <p className="uth-account-message" role="status">{message}</p>}
+          <button className="uth-button uth-button-primary uth-full-button" type="submit" disabled={isSubmitting}>{isSubmitting ? 'Updating…' : 'Update passcode'}</button>
+          <button className="uth-button uth-button-secondary" type="button" disabled={isSubmitting} onClick={() => { setResetMode(false); setResetChallengeId(null); setMessage(''); }}>Back to sign in</button>
+        </form>
+        : <form className="uth-account-form" onSubmit={submitPasswordResetRequest}>
+          <p className="uth-account-note">Request a verification code using the email address on the account.</p>
+          <label>Email address<input required name="email" type="email" autoComplete="email" /></label>
+          {message && <p className="uth-account-message" role="status">{message}</p>}
+          <button className="uth-button uth-button-primary uth-full-button" type="submit" disabled={isSubmitting}>{isSubmitting ? 'Requesting code…' : 'Send reset code'}</button>
+          <button className="uth-button uth-button-secondary" type="button" disabled={isSubmitting} onClick={() => { setResetMode(false); setMessage(''); }}>Back to sign in</button>
+        </form>
+        : challenge ? <form className="uth-account-form" onSubmit={submitVerification}>
+        <p className="uth-account-note">{challenge.purpose === 'TOTP_LOGIN' ? 'Use the current code from your authenticator app.' : 'Use the one-time code sent by the configured verification provider. In local development, the mock code is written to the backend logs.'}</p>
+        <label>Verification code<input required name="code" inputMode="numeric" pattern="[0-9]{6}" minLength={6} maxLength={6} autoComplete="one-time-code" /></label>
+        {message && <p className="uth-account-message" role="status">{message}</p>}
+        <button className="uth-button uth-button-primary uth-full-button" type="submit" disabled={isSubmitting}>{isSubmitting ? 'Verifying…' : 'Verify and continue'} <Icon name="arrow" size={16} /></button>
+        <button className="uth-button uth-button-secondary" type="button" disabled={isSubmitting} onClick={() => { setChallenge(null); setMessage(''); }}>Back to sign in</button>
+      </form> : <form className="uth-account-form" onSubmit={submitCredentials}>
         <label>Workspace role
           <select value={role} onChange={(event) => {
             const value = event.currentTarget.value;
@@ -134,57 +296,70 @@ function AccountAccess({ role, mode, message, onRoleChange, onModeChange, onSubm
         </label>
 
         {!registering && role === 'Admin' && <>
-          <label>Admin ID<input required autoComplete="username" placeholder="Fictional admin ID" /></label>
-          <label>Passcode<input required type="password" autoComplete="current-password" placeholder="Admin passcode" /></label>
+          <label>Admin ID<input required name="username" autoComplete="username" /></label>
+          <PasscodeField label="Passcode" name="password" autoComplete="current-password" />
         </>}
         {!registering && role !== 'Admin' && <>
-          <label>Email address<input required type="email" autoComplete="username" placeholder="name@example.test" /></label>
-          <label>Passcode<input required type="password" autoComplete="current-password" placeholder="Account passcode" /></label>
+          <label>Email address<input required name="email" type="email" autoComplete="username" /></label>
+          <PasscodeField label="Passcode" name="password" autoComplete="current-password" />
         </>}
+        {!registering && <button className="uth-account-link" type="button" onClick={() => { setResetMode(true); setMessage(''); }}>Forgot passcode?</button>}
 
         {registering && role === 'Blood Bank' && <>
-          <label>Hospital / blood bank name<input required autoComplete="organization" placeholder="Fictional hospital name" /></label>
-          <label>Contact person<input required autoComplete="name" placeholder="Staff contact name" /></label>
-          <label>Email address<input required type="email" autoComplete="email" placeholder="name@example.test" /></label>
-          <label>Phone number<input required type="tel" autoComplete="tel" placeholder="Demo phone number" /></label>
-          <label>Hospital address<input required autoComplete="street-address" placeholder="Fictional street and locality" /></label>
-          <label>Create passcode<input required type="password" autoComplete="new-password" minLength={12} placeholder="At least 12 characters" /></label>
+          <label>Hospital / blood bank name<input required name="institution_name" autoComplete="organization" /></label>
+          <label>Authorized representative<input required name="representative_name" autoComplete="name" /></label>
+          <label>Email address<input required name="email" type="email" autoComplete="email" /></label>
+          <label>Official phone<input required name="phone" type="tel" autoComplete="tel" /></label>
+          <label>Official address<input required name="address" autoComplete="street-address" /></label>
+          <div className="uth-form-row">
+            <label>Locality<input required name="locality" /></label>
+            <label>City<input required name="city" autoComplete="address-level2" /></label>
+          </div>
+          <div className="uth-form-row">
+            <label>District<input required name="district" /></label>
+            <label>State<input required name="state" autoComplete="address-level1" /></label>
+          </div>
+          <div className="uth-form-row">
+            <label>PIN code<input required name="pincode" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} autoComplete="postal-code" /></label>
+            <label>Registration number<input required name="registration_number" /></label>
+          </div>
+          <label>Issuing authority<input required name="issuing_authority" /></label>
+          <PasscodeField label="Create passcode" name="password" autoComplete="new-password" minLength={12} />
+          <PasscodeField label="Confirm passcode" name="password_confirmation" autoComplete="new-password" minLength={12} />
         </>}
 
         {registering && role === 'Donor' && <>
-          <label>Full name<input required autoComplete="name" placeholder="Fictional donor name" /></label>
-          <div className="uth-form-row">
-            <label>Date of birth<input required type="date" autoComplete="bday" /></label>
-            <label>Gender<select required defaultValue=""><option value="" disabled>Select gender</option><option>Woman</option><option>Man</option><option>Non-binary</option><option>Prefer not to say</option></select></label>
-          </div>
-          <label>Blood group<select required defaultValue=""><option value="" disabled>Select a group</option>{bloodGroups.map((group) => <option key={group}>{group}</option>)}</select></label>
-          <label>Approximate locality<input required autoComplete="address-level2" placeholder="City or locality only" /></label>
-          <label>Email address<input required type="email" autoComplete="email" placeholder="name@example.test" /></label>
-          <label>Phone number<input required type="tel" autoComplete="tel" placeholder="Demo phone number" /></label>
-          <label>Create passcode<input required type="password" autoComplete="new-password" minLength={12} placeholder="At least 12 characters" /></label>
-          <label className="uth-account-consent"><input type="checkbox" /> I agree to receive emergency blood-request alerts.</label>
-          <p className="uth-account-note">Weight, height, and diabetes details are not collected here or used for matching. They do not establish medical eligibility.</p>
+          <label>Email address<input required name="email" type="email" autoComplete="email" /></label>
+          <label>Phone number<input required name="phone" type="tel" autoComplete="tel" /></label>
+          <PasscodeField label="Create passcode" name="password" autoComplete="new-password" minLength={12} />
+          <PasscodeField label="Confirm passcode" name="password_confirmation" autoComplete="new-password" minLength={12} />
+          <p className="uth-account-note">Donor profile details and medical screening are separate from account authentication. This registration step does not assess eligibility.</p>
         </>}
 
-        {registering && <div className="uth-account-note uth-account-privacy"><Icon name="shield" size={16} />Donor contact details are not shown in lists. In a real workflow they require donor opt-in for a specific reservation, verified phone, and authorized access.</div>}
+        {registering && <label className="uth-account-consent"><input required name="privacy_consent" type="checkbox" /> I agree to the privacy notice and account terms.</label>}
+        {registering && role === 'Blood Bank' && <div className="uth-account-note uth-account-privacy"><Icon name="shield" size={16} />Blood bank accounts remain inactive until an administrator reviews and verifies the institution.</div>}
         {message && <p className="uth-account-message" role="status">{message}</p>}
-        <button className="uth-button uth-button-primary uth-full-button" type="submit">{registering ? 'Submit demo registration' : 'Enter demo workspace'} <Icon name="arrow" size={16} /></button>
-      </form>
-      <p className="uth-account-disclaimer">Use fictional details only. This form is a visual prototype; entries are not transmitted, stored, or verified.</p>
+        <button className="uth-button uth-button-primary uth-full-button" type="submit" disabled={isSubmitting}>{isSubmitting ? 'Contacting Uthiram…' : registering ? 'Create account' : 'Sign in'} <Icon name="arrow" size={16} /></button>
+      </form>}
+      {!challenge && !resetMode && <p className="uth-account-switch">
+        {registering ? 'Already have an account?' : 'New to Uthiram?'}
+        {' '}<button className="uth-account-link" type="button" onClick={() => onModeChange(registering ? 'login' : 'register')}>{registering ? 'Sign in' : 'Create account'}</button>
+      </p>}
+      <p className="uth-account-disclaimer">Use accurate account and institution information. Never enter patient information here. Health screening is not collected in this authentication flow.</p>
     </div>
   </section>;
 }
 
 export default function UthiramApp() {
   const requestedRole = new URLSearchParams(window.location.search).get('role');
-  const initialRole: Role = requestedRole === 'Donor' || requestedRole === 'General Donor'
+  const previewRole: Role = requestedRole === 'Donor' || requestedRole === 'General Donor'
     ? 'Donor'
     : requestedRole === 'Admin' ? 'Admin' : 'Blood Bank';
-  const [screen, setScreen] = useState<Screen>(initialRole === 'Admin' ? 'Donors' : initialRole === 'Blood Bank' ? 'Requests' : 'Overview');
-  const [role, setRole] = useState<Role>(initialRole);
-  const [accountRole, setAccountRole] = useState<Role>(initialRole);
+  const defaultScreen: Screen = previewRole === 'Admin' ? 'Donors' : 'Overview';
+  const [screen, setScreen] = useState<Screen>(defaultScreen);
+  const [role, setRole] = useState<Role>(previewRole);
+  const [accountRole, setAccountRole] = useState<Role>(previewRole);
   const [accountMode, setAccountMode] = useState<AccountMode>('login');
-  const [accountMessage, setAccountMessage] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
   const [showRequestForm, setShowRequestForm] = useState(false);
   const [confirmAccept, setConfirmAccept] = useState(false);
@@ -199,8 +374,6 @@ export default function UthiramApp() {
   const [toast, setToast] = useState('');
   const [notificationsPaused, setNotificationsPaused] = useState(false);
   const [acknowledgedRequests, setAcknowledgedRequests] = useState<string[]>([]);
-  const [rbcCompatibility, setRbcCompatibility] = useState<RbcCompatibilityMap | null>(null);
-  const [compatibilityError, setCompatibilityError] = useState('');
   const [requestForm, setRequestForm] = useState({ facility: '', locality: '', blood: 'O+', component: 'RED_CELLS', quantity: '3', requiredBy: '' });
   const [requestDetails, setRequestDetails] = useState({ facility: 'ABC Hospital', locality: 'Adyar, Chennai', blood: 'O+' });
   const [donorSubmittedRequest, setDonorSubmittedRequest] = useState<SubmittedBloodRequest | null>(null);
@@ -210,31 +383,12 @@ export default function UthiramApp() {
     { type: string; title: string; time: string; tone: string }[]
   >([]);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    const apiUrl = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:8000`;
-    void fetch(`${apiUrl.replace(/\/$/, '')}/compatibility/rbc`, { signal: controller.signal })
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`Compatibility rules could not be loaded (HTTP ${response.status}).`);
-        const value: unknown = await response.json();
-        if (!isRbcCompatibilityMap(value)) throw new Error('The compatibility API returned an invalid blood-group matrix.');
-        setRbcCompatibility(value);
-        setCompatibilityError('');
-      })
-      .catch((error: unknown) => {
-        if (!controller.signal.aborted) {
-          setCompatibilityError(error instanceof Error ? error.message : 'Compatibility rules could not be loaded.');
-        }
-      });
-    return () => controller.abort();
-  }, []);
-
   const accepted = donors.filter((donor) => donor.status === 'Accepted').length;
   const declined = donors.filter((donor) => donor.status === 'Declined').length;
   const noResponse = donors.filter((donor) => donor.status === 'No response').length;
   const remaining = Math.max(0, required - accepted);
   const currentDonorAlerts = donors.filter((donor) => donor.stage === stage && donor.status === 'Waiting');
-  const contactable = 128;
+  const availableUnits = 128;
   const openAcceptConfirmation = (donorId: string) => {
     setConfirmDonorId(donorId);
     setConfirmAccept(true);
@@ -262,8 +416,8 @@ export default function UthiramApp() {
 
   const activeRadius = stageRanges[stage]?.range ?? 'Broader area';
   const visibleNavItems = navItems.filter((item) => {
-    if (role === 'Admin') return item.label === 'Donors';
-    if (role === 'Donor') return ['Overview', 'Requests', 'Notifications', 'Compatibility'].includes(item.label);
+    if (role === 'Admin') return ['Donors', 'Donation report'].includes(item.label);
+    if (role === 'Donor') return ['Overview', 'Requests', 'Notifications'].includes(item.label);
     return ['Overview', 'Requests', 'Outreach'].includes(item.label);
   });
   const requestRows = useMemo(() => [
@@ -402,28 +556,22 @@ export default function UthiramApp() {
 
   function switchDemoRole() {
     const nextRole = role === 'Blood Bank' ? 'Donor' : role === 'Donor' ? 'Admin' : 'Blood Bank';
+    changeDemoRole(nextRole);
+  }
+
+  function changeDemoRole(nextRole: Role) {
     setRole(nextRole);
-    setScreen(nextRole === 'Admin' ? 'Donors' : nextRole === 'Blood Bank' ? 'Requests' : 'Overview');
+    setScreen(nextRole === 'Admin' ? 'Donors' : 'Overview');
     setShowRequestForm(false);
     setConfirmAccept(false);
     setConfirmDonorId(null);
   }
 
-  function openAccountAccess() {
-    setAccountRole(role);
-    setAccountMode('login');
-    setAccountMessage('');
-    setScreen('Account');
-  }
-
-  function continueInDemo(mode: AccountMode) {
-    if (mode === 'register') {
-      setAccountMessage('Demo only: no account was created and no personal information was saved or sent.');
-      return;
-    }
-    setRole(accountRole);
-    setScreen(accountRole === 'Admin' ? 'Donors' : accountRole === 'Blood Bank' ? 'Requests' : 'Overview');
-    setToast(`Demo access only: ${accountRole} credentials are not verified or sent to the API.`);
+  function completeAuthentication(authenticatedRole: Role) {
+    setRole(authenticatedRole);
+    setAccountRole(authenticatedRole);
+    setScreen(authenticatedRole === 'Admin' ? 'Donors' : authenticatedRole === 'Blood Bank' ? 'Requests' : 'Overview');
+    setToast(`Demo role changed to ${authenticatedRole}.`);
   }
 
   return (
@@ -443,7 +591,7 @@ export default function UthiramApp() {
         </nav>
         <div className="uth-sidebar-bottom">
           <div className="uth-safe-note"><Icon name="shield" size={17} /><span><strong>Privacy by design</strong><small>Approximate location only</small></span></div>
-          <div className="uth-user"><span className="uth-avatar">AR</span><span><strong>Ananya Raman</strong><small>{role}</small></span><button type="button" className="uth-user-menu" title="Switch demo role" onClick={switchDemoRole}>⇄</button></div>
+          <div className="uth-user"><span className="uth-avatar">AR</span><span><strong>Demo account</strong><small>{role}</small></span><button type="button" className="uth-user-menu" title="Switch demo role" onClick={switchDemoRole}>⇄</button></div>
         </div>
       </aside>
       {menuOpen && <button className="uth-scrim" type="button" aria-label="Close navigation" onClick={() => setMenuOpen(false)} />}
@@ -454,15 +602,25 @@ export default function UthiramApp() {
           <div className="uth-crumb"><span>ABC Hospital</span><b>/</b><strong>{screen}</strong></div>
           <div className="uth-top-actions">
             <span className="uth-demo-chip"><i /> DEMO MODE</span>
-            <button type="button" className="uth-account-link" onClick={openAccountAccess}>Sign in / Register</button>
             <button type="button" className="uth-icon-button uth-top-bell" aria-label="Open notifications" onClick={() => setScreen('Notifications')}><Icon name="bell" /><i /></button>
-            <button type="button" className="uth-role-select" aria-label="Switch user role" onClick={switchDemoRole}><span className="uth-avatar uth-avatar-small">AR</span><span>{role}</span><b>⌄</b></button>
+            <label className="uth-role-select" aria-label="Switch demo role">
+              <span className="uth-avatar uth-avatar-small">AR</span>
+              <select value={role} aria-label="Demo role" style={{ maxWidth: '100px', padding: '4px 0', border: 0, background: 'transparent', color: 'inherit', fontSize: 9, cursor: 'pointer' }} onChange={(event) => {
+                const value = event.currentTarget.value;
+                if (value === 'Admin' || value === 'Blood Bank' || value === 'Donor') changeDemoRole(value);
+              }}>
+                <option value="Admin">Admin</option>
+                <option value="Blood Bank">Blood Bank</option>
+                <option value="Donor">Donor</option>
+              </select>
+              <b>⌄</b>
+            </label>
           </div>
         </header>
 
         <div className="uth-content">
           <div className="uth-heading-row">
-            <div><div className="uth-eyebrow"><span className="uth-live" /> {screen === 'Account' ? 'ACCOUNT PREVIEW' : role === 'Donor' ? 'DONOR PORTAL' : role === 'Admin' ? 'ADMIN CONTROL CENTRE' : 'BLOOD BANK WORKSPACE'}</div><h1>{contentTitle()}</h1><p className="uth-subtitle">{screen === 'Account' ? 'Role-specific forms for fictional demo use. Nothing is sent or saved.' : role === 'Donor' ? 'Your availability and consent stay in your control.' : role === 'Admin' ? 'Fictional donor records only. No contact details.' : 'Submit requests and track donor responses.'}</p></div>
+            <div><div className="uth-eyebrow"><span className="uth-live" /> {screen === 'Account' ? 'ACCOUNT ACCESS' : role === 'Donor' ? 'DONOR PORTAL' : role === 'Admin' ? 'ADMIN CONTROL CENTRE' : 'BLOOD BANK WORKSPACE'}</div><h1>{contentTitle()}</h1><p className="uth-subtitle">{screen === 'Account' ? 'Sign in and registration use the configured Uthiram API.' : role === 'Donor' ? 'Your availability and consent stay in your control.' : role === 'Admin' ? 'Fictional donor records only. No contact details.' : 'Submit requests and track donor responses.'}</p></div>
             <div className="uth-heading-actions">
               {screen !== 'Account' && role === 'Blood Bank' && <button className="uth-button uth-button-primary" type="button" onClick={() => setShowRequestForm(true)}><Icon name="plus" size={16} /> New request</button>}
               {screen !== 'Account' && role === 'Donor' && <button className="uth-button uth-button-primary" type="button" onClick={() => setShowRequestForm(true)}>Request blood</button>}
@@ -472,14 +630,12 @@ export default function UthiramApp() {
           {screen === 'Account' && <AccountAccess
             role={accountRole}
             mode={accountMode}
-            message={accountMessage}
-            onRoleChange={(nextRole) => { setAccountRole(nextRole); setAccountMessage(''); }}
+            onRoleChange={(nextRole) => { setAccountRole(nextRole); }}
             onModeChange={(nextMode) => {
               setAccountMode(nextMode);
               if (nextMode === 'register' && accountRole === 'Admin') setAccountRole('Blood Bank');
-              setAccountMessage('');
             }}
-            onSubmit={() => continueInDemo(accountMode)}
+            onAuthenticated={completeAuthentication}
           />}
 
           {screen !== 'Account' && role === 'Blood Bank' && requestActive && <div className="uth-live-strip"><span className="uth-live-ring"><Icon name="radio" size={17} /></span><span><strong>Live demo outreach · {requestId}</strong><small>{activeRadius} radius · {currentDonorAlerts.length} donor alerts awaiting response</small></span><span className="uth-strip-timer"><Icon name="clock" size={15} /> {formatTime(secondsLeft)}</span><button type="button" aria-label="Open outreach" onClick={() => setScreen('Outreach')}><Icon name="arrow" size={17} /></button></div>}
@@ -487,7 +643,7 @@ export default function UthiramApp() {
           {screen === 'Overview' && <>
             {role === 'Blood Bank' && <section className="uth-metric-grid" aria-label="Community response summary">
               <article className="uth-metric"><div className="uth-metric-head"><span>Active requests</span><span className="uth-metric-icon icon-red"><Icon name="drop" size={17} /></span></div><strong>06</strong><small><i className="mini-green" /> 2 need outreach</small></article>
-              <article className="uth-metric"><div className="uth-metric-head"><span>Donor profiles</span><span className="uth-metric-icon icon-green"><Icon name="users" size={17} /></span></div><strong>{contactable}</strong><small>Fictional, aggregate demo count</small></article>
+              <article className="uth-metric"><div className="uth-metric-head"><span>Blood units in inventory</span><span className="uth-metric-icon icon-green"><Icon name="drop" size={17} /></span></div><strong>{availableUnits}</strong><small>Illustrative demo stock</small></article>
               <article className="uth-metric"><div className="uth-metric-head"><span>Pending verification</span><span className="uth-metric-icon icon-orange"><Icon name="clock" size={17} /></span></div><strong>03</strong><small>Oldest request · 11 min</small></article>
               <article className="uth-metric"><div className="uth-metric-head"><span>Fulfilled today</span><span className="uth-metric-icon icon-blue"><Icon name="check" size={17} /></span></div><strong>08</strong><small>Alerts stopped automatically</small></article>
             </section>}
@@ -500,11 +656,9 @@ export default function UthiramApp() {
                 requestActive={requestActive}
                 secondsLeft={secondsLeft}
                 notificationsPaused={notificationsPaused}
-                compatibility={rbcCompatibility}
                 setNotificationsPaused={setNotificationsPaused}
                 setConfirmAccept={setConfirmAccept}
                 respondToAlert={respondToAlert}
-                onCompatibility={() => setScreen('Compatibility')}
                 onTrackingStatusChange={handleTrackingStatusChange}
                 onDonorArrived={() => setDonorArrived(true)}
               />
@@ -575,9 +729,9 @@ export default function UthiramApp() {
               <OutreachScreen stage={stage} secondsLeft={secondsLeft} donors={donors} accepted={accepted} declined={declined} noResponse={noResponse} remaining={remaining} required={required} active={requestActive} onAdvance={advanceRadius} onStop={() => stopOutreach('Outreach stopped by coordinator.')} onFulfil={markFulfilled} />
             </>
           )}
-          {screen === 'Donors' && role === 'Admin' && <DonorDirectory donors={donors} />}
+          {screen === 'Donors' && role === 'Admin' && <DonorDirectory donors={donors} reservationId={requestId} />}
+          {screen === 'Donation report' && role === 'Admin' && <AdminDonationReport />}
           {screen === 'Notifications' && role === 'Donor' && <NotificationsScreen trackingNotifications={trackingNotifications} />}
-          {screen === 'Compatibility' && role === 'Donor' && <RbcCompatibilityPage compatibility={rbcCompatibility} error={compatibilityError} />}
 
           <footer className="uth-footer"><span>UTHIRAM <i>·</i> Community response prototype</span><span><Icon name="shield" size={13} /> Fictional demo data · No clinical decisions</span></footer>
         </div>
@@ -604,11 +758,9 @@ function DonorHome({
   requestActive,
   secondsLeft,
   notificationsPaused,
-  compatibility,
   setNotificationsPaused,
   setConfirmAccept,
   respondToAlert,
-  onCompatibility,
   onTrackingStatusChange,
   onDonorArrived,
 }: {
@@ -617,17 +769,14 @@ function DonorHome({
   requestActive: boolean;
   secondsLeft: number;
   notificationsPaused: boolean;
-  compatibility: RbcCompatibilityMap | null;
   setNotificationsPaused: (value: boolean) => void;
   setConfirmAccept: (value: boolean) => void;
   respondToAlert: (id: string, status: 'Accepted' | 'Declined') => void;
-  onCompatibility: () => void;
   onTrackingStatusChange?: (status: string, toast: string) => void;
   onDonorArrived?: () => void;
 }) {
   const alert = donors.find((donor) => donor.stage === stage && donor.status === 'Waiting');
   const acceptedDonor = donors.find((donor) => donor.status === 'Accepted');
-  const potentialRecipients = compatibility ? donorRbcRecipientGroups('O+', compatibility) : [];
   return (
     <div className="uth-donor-home-container">
       {acceptedDonor && (
@@ -643,8 +792,29 @@ function DonorHome({
       <div className="uth-donor-home-grid">
         <section className="uth-panel uth-donor-status-panel">
           <div className="uth-panel-head"><div><span className="uth-section-label">YOUR DONOR PROFILE</span><h2>Availability & consent</h2></div><button className={`uth-toggle ${notificationsPaused ? '' : 'toggle-on'}`} type="button" role="switch" aria-checked={!notificationsPaused} onClick={() => setNotificationsPaused(!notificationsPaused)}><span /></button></div>
-          <div className="uth-blood-profile"><span>O+</span><div><strong>Fictional demo group · verification simulated</strong><small>{compatibility ? `Potential red-cell recipient groups: ${potentialRecipients.join(', ')}` : 'Potential recipient groups are unavailable until compatibility rules load.'}</small></div></div>
-          <button className="uth-link-button uth-compatibility-link" type="button" onClick={onCompatibility}>View blood group compatibility table <Icon name="arrow" size={15} /></button>
+          <div className="uth-blood-profile" style={{ display: 'block' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
+              <strong>Example donor details</strong><small style={{ marginTop: 0 }}>Fictional demo data</small>
+            </div>
+            <dl style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '0 14px', margin: 0 }}>
+              {[
+                ['Name', 'Kavya Sample'],
+                ['Date of birth', '14 June 1995'],
+                ['Gender', 'Female'],
+                ['Phone number', '+91 00000 00000'],
+                ['Email', 'kavya.demo@example.invalid'],
+                ['Address', '12 Example Street, Demo Nagar'],
+                ['District', 'Chennai'],
+                ['State', 'Tamil Nadu'],
+              ].map(([label, value]) => (
+                <div key={label} style={{ minWidth: 0, padding: '7px 0', borderTop: '1px solid #edf0f1' }}>
+                  <dt style={{ marginBottom: 3, color: '#8a989f', fontSize: 8 }}>{label}</dt>
+                  <dd style={{ overflowWrap: 'anywhere', margin: 0, color: '#526571', fontSize: 9, fontWeight: 600 }}>{value}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+          <div className="uth-blood-profile"><span>O+</span><div><strong>Fictional demo group · verification simulated</strong><small>Blood group alone does not establish medical eligibility or donation suitability.</small></div></div>
           <div className="uth-donor-setting"><span>Availability</span><Status tone={notificationsPaused ? 'orange' : 'green'}>{notificationsPaused ? 'Paused' : 'Available'}</Status></div>
           <div className="uth-donor-setting"><span>Emergency alerts</span><Status tone={notificationsPaused ? 'orange' : 'green'}>{notificationsPaused ? 'Paused' : 'On'}</Status></div>
           <div className="uth-donor-setting"><span>Blood bank screening</span><Status tone="neutral">Simulated in demo</Status></div>
@@ -750,31 +920,6 @@ function DonorRequests({
   );
 }
 
-function RbcCompatibilityPage({ compatibility, error }: { compatibility: RbcCompatibilityMap | null; error: string }) {
-  if (!compatibility) {
-    return <section className="uth-panel uth-compatibility-panel" aria-live="polite">
-      <div className="uth-panel-head"><div><span className="uth-section-label">RED BLOOD CELL (RBC) ONLY</span><h2>Blood group compatibility</h2></div></div>
-      <p className={error ? 'uth-compatibility-error' : 'uth-compatibility-note'} role={error ? 'alert' : 'status'}>{error || 'Loading compatibility rules from the backend…'}</p>
-    </section>;
-  }
-  return <section className="uth-panel uth-compatibility-panel">
-    <div className="uth-panel-head"><div><span className="uth-section-label">RED BLOOD CELL (RBC) ONLY</span><h2>Blood group compatibility</h2><p>Rows are recipients; columns are donor groups.</p></div></div>
-    <div className="uth-compatibility-scroll" role="region" aria-label="Red blood cell compatibility table; scroll horizontally to view all donor groups" tabIndex={0}>
-      <table className="uth-compatibility-table">
-        <caption>Potential red-cell donor blood groups by recipient group</caption>
-        <thead><tr><th scope="col">Recipient \ Donor</th>{bloodGroups.map((group) => <th scope="col" key={group}>{group}</th>)}</tr></thead>
-        <tbody>{bloodGroups.map((recipientGroup) => <tr key={recipientGroup}><th scope="row">{recipientGroup}</th>{bloodGroups.map((donorGroup) => {
-          const compatible = compatibility[recipientGroup]?.includes(donorGroup) ?? false;
-          return <td key={donorGroup} aria-label={`${recipientGroup} recipient, ${donorGroup} donor: ${compatible ? 'potentially compatible red cells' : 'not compatible'}`}>{compatible ? '✓' : '—'}</td>;
-        })}</tr>)}</tbody>
-      </table>
-    </div>
-    <p className="uth-compatibility-legend"><strong>Legend:</strong> ✓ Potentially compatible red-cell group · — Not compatible under this general table</p>
-    <p className="uth-compatibility-note">This table shows general red blood cell compatibility. Actual donation and transfusion suitability must be confirmed by qualified blood-bank professionals.</p>
-    <p className="uth-compatibility-note">This table does not apply to plasma, platelets, whole blood, or other components. Unknown or unverified donor groups are not used to create notifications.</p>
-  </section>;
-}
-
 function DonorAlertCard({ alert, secondsLeft, setConfirmAccept, respondToAlert }: { alert: DonorAlert; secondsLeft: number; setConfirmAccept: (value: boolean) => void; respondToAlert: (id: string, status: 'Accepted' | 'Declined') => void }) {
   const openAcceptConfirmation = useContext(ConfirmAcceptContext);
   return <section className="uth-emergency-card"><div className="uth-emergency-top"><span className="uth-emergency-tag"><i /> URGENT BLOOD REQUIREMENT</span><span className="uth-response-time"><Icon name="clock" size={15} /> {formatTime(secondsLeft)}</span></div><div className="uth-emergency-blood">O+ <span>BLOOD NEEDED</span></div><div className="uth-emergency-hospital"><strong>ABC Hospital</strong><span><Icon name="pin" size={15} /> 3.2 km away · Adyar</span></div><div className="uth-needed-by"><span>REQUIRED BY</span><strong>Today, 10:30 PM</strong></div><p>Can you help coordinate with the hospital?</p><div className="uth-alert-actions"><button type="button" className="uth-alert-accept" onClick={() => { setConfirmAccept(true); openAcceptConfirmation(alert.id); }}><Icon name="check" size={17} /> ACCEPT</button><button type="button" className="uth-alert-decline" onClick={() => respondToAlert(alert.id, 'Declined')}>DECLINE</button></div><small className="uth-alert-footnote">Your response is not confirmation of medical eligibility or donation.</small></section>;
@@ -807,25 +952,25 @@ function DonorRequestReview({ request, onDecision }: { request: SubmittedBloodRe
 
 function BloodGroupAvailability() {
   const availability = [
-    { group: 'O-', profiles: 5, verified: 3 },
-    { group: 'O+', profiles: 32, verified: 24 },
-    { group: 'A-', profiles: 8, verified: 6 },
-    { group: 'A+', profiles: 27, verified: 20 },
-    { group: 'B-', profiles: 6, verified: 4 },
-    { group: 'B+', profiles: 21, verified: 15 },
-    { group: 'AB-', profiles: 4, verified: 3 },
-    { group: 'AB+', profiles: 25, verified: 17 },
+    { group: 'O-', units: 5 },
+    { group: 'O+', units: 32 },
+    { group: 'A-', units: 8 },
+    { group: 'A+', units: 27 },
+    { group: 'B-', units: 6 },
+    { group: 'B+', units: 21 },
+    { group: 'AB-', units: 4 },
+    { group: 'AB+', units: 25 },
   ];
 
   return <section className="uth-panel uth-availability-panel">
-    <div className="uth-panel-head"><div><span className="uth-section-label">FICTIONAL DEMO COUNTS</span><h2>Donor profiles by blood group</h2><p>Aggregate profiles only; not a donor contact list.</p></div></div>
+    <div className="uth-panel-head"><div><span className="uth-section-label">ILLUSTRATIVE DEMO INVENTORY</span><h2>Red cell units by blood group</h2><p>Sample blood-bank stock counts, not donor availability.</p></div></div>
     <div className="uth-table-scroll">
       <table className="uth-availability-table">
-        <thead><tr><th scope="col">Blood group</th><th scope="col">Profiles marked available</th><th scope="col">Group verification recorded</th></tr></thead>
-        <tbody>{availability.map((item) => <tr key={item.group}><th scope="row">{item.group}</th><td>{item.profiles}</td><td>{item.verified}</td></tr>)}</tbody>
+        <thead><tr><th scope="col">Blood group</th><th scope="col">Component</th><th scope="col">Units in inventory</th></tr></thead>
+        <tbody>{availability.map((item) => <tr key={item.group}><th scope="row">{item.group}</th><td>Red cells</td><td>{item.units}</td></tr>)}</tbody>
       </table>
     </div>
-    <p className="uth-availability-note">Counts are illustrative, not connected to the API, and do not establish donor eligibility or transfusion suitability. Contact details are shared only for a specific reservation after donor opt-in, phone verification, and authorization.</p>
+    <p className="uth-availability-note">These fictional demo counts are not connected to a live inventory system. A displayed stock count does not confirm availability, compatibility, or suitability; the blood bank must verify current stock and complete all required clinical checks.</p>
   </section>;
 }
 
@@ -845,8 +990,114 @@ function SafetyPanel() {
   return <aside className="uth-safety-panel"><span className="uth-safety-icon"><Icon name="shield" size={19} /></span><span className="uth-section-label">CLINICAL BOUNDARY</span><h2>Coordination support,<br />not a medical decision.</h2><p>Final donor eligibility, blood compatibility, screening and collection remain with the authorised hospital or blood bank.</p><span className="uth-safety-link">All information is fictional demo data</span></aside>;
 }
 
-function DonorDirectory({ donors }: { donors: DonorAlert[] }) {
-  return <section className="uth-panel uth-full-panel"><div className="uth-panel-head"><div><span className="uth-section-label">DONOR & BLOOD BANK DONOR LISTS</span><h2>Donor data</h2><p>Fictional donor records for administrator and blood-bank coordination. No contact details.</p></div></div><div className="uth-donor-directory">{donors.map((donor) => <article className="uth-directory-card" key={donor.id}><span className="uth-avatar donor-initials">{donor.initials}</span><div><strong>{donor.id}</strong><small>{donor.blood} · {donor.locality}</small></div><Status tone={donor.status === 'Accepted' ? 'green' : donor.status === 'Declined' ? 'orange' : 'blue'}>{donor.status === 'Waiting' ? 'Contactable' : donor.status}</Status><span className="uth-directory-distance">{donor.distance} km approx.</span></article>)}</div><p className="uth-directory-foot"><Icon name="shield" size={15} /> Approximate locality only. Donor responses are willingness to coordinate, not medical approval.</p></section>;
+function DonorDirectory({ donors, reservationId }: { donors: DonorAlert[]; reservationId: string }) {
+  return <section className="uth-panel uth-full-panel">
+    <div className="uth-panel-head"><div><span className="uth-section-label">ADMIN DONOR DIRECTORY</span><h2>Donor data</h2><p>Fictional donor records for coordination. Contact details are kept private.</p></div></div>
+    <div className="uth-donor-directory">{donors.map((donor) => {
+      const profile = demoDonorProfiles[donor.id];
+      const contactAccess = profile.contactAccess;
+      const email = contactAccess?.donorOptedIn
+        && contactAccess.phoneVerified
+        && contactAccess.reservationId === reservationId
+        ? `${profile.email} · opted in for ${contactAccess.reservationId}`
+        : 'Private — donor opt-in and phone verification required';
+      const details = [
+        ['Date of birth', profile.dateOfBirth],
+        ['Gender', profile.gender],
+        ['Phone number', 'Private — shared only with donor consent'],
+        ['Email', email],
+        ['Address', `Approximate locality only · ${donor.locality}`],
+        ['District', profile.district],
+        ['State', profile.state],
+      ];
+      return <article className="uth-directory-card" key={donor.id} style={{ display: 'block', minHeight: 0, padding: 14, border: '1px solid #edf0f1', borderRadius: 5, background: '#fbfcfc' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 10 }}>
+          <span className="uth-avatar donor-initials">{donor.initials}</span>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <strong style={{ display: 'block', color: '#526873', fontSize: 9 }}>{profile.name}</strong>
+            <small style={{ display: 'block', marginTop: 4, color: '#909da4', fontSize: 8 }}>{donor.id} · {donor.blood} · Fictional demo data</small>
+          </div>
+          <Status tone={donor.status === 'Accepted' ? 'green' : donor.status === 'Declined' ? 'orange' : 'blue'}>{donor.status === 'Waiting' ? 'Contactable' : donor.status}</Status>
+        </div>
+        <dl style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(135px, 1fr))', gap: '0 14px', margin: 0 }}>
+          {details.map(([label, value]) => (
+            <div key={label} style={{ minWidth: 0, padding: '7px 0', borderTop: '1px solid #edf0f1' }}>
+              <dt style={{ marginBottom: 3, color: '#8a989f', fontSize: 8 }}>{label}</dt>
+              <dd style={{ overflowWrap: 'anywhere', margin: 0, color: '#526571', fontSize: 9, fontWeight: 600 }}>{value}</dd>
+            </div>
+          ))}
+        </dl>
+        <p style={{ margin: '9px 0 0', color: '#84939a', fontSize: 8 }}>{donor.distance} km approx. · donor response is willingness to coordinate, not medical approval</p>
+      </article>;
+    })}</div>
+    <p className="uth-directory-foot"><Icon name="shield" size={15} /> Contact details appear only for a specific reservation after donor opt-in and phone verification. All profile and email data shown here are fictional demo data.</p>
+  </section>;
+}
+
+function AdminDonationReport() {
+  const dailyDonations = [
+    { date: '18 Oct', count: 0 },
+    { date: '19 Oct', count: 1 },
+    { date: '20 Oct', count: 2 },
+    { date: '21 Oct', count: 1 },
+    { date: '22 Oct', count: 0 },
+    { date: '23 Oct', count: 3 },
+    { date: '24 Oct', count: 2 },
+  ];
+  const chartPoints = dailyDonations
+    .map((item, index) => `${72 + index * 96},${180 - item.count * 40}`)
+    .join(' ');
+
+  return <section aria-labelledby="donation-report-title">
+    <div className="uth-panel uth-full-panel">
+      <div className="uth-panel-head">
+        <div>
+          <span className="uth-section-label">FICTIONAL DEMO REPORT</span>
+          <h2 id="donation-report-title">Donation coordination report</h2>
+          <p>Illustrative totals only; this prototype is not connected to live request or donation records.</p>
+        </div>
+      </div>
+      <div className="uth-metric-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', padding: '0 18px' }}>
+        <article className="uth-metric">
+          <div className="uth-metric-head"><span>Initiated requests</span><span className="uth-metric-icon icon-blue"><Icon name="drop" size={17} /></span></div>
+          <strong>24</strong>
+          <small>Fictional sample requests</small>
+        </article>
+        <article className="uth-metric">
+          <div className="uth-metric-head"><span>Verified successful donations</span><span className="uth-metric-icon icon-green"><Icon name="check" size={17} /></span></div>
+          <strong>9</strong>
+          <small>Fictional verified completions</small>
+        </article>
+      </div>
+      <section aria-labelledby="donation-chart-title" style={{ margin: '0 18px 16px', padding: 16, border: '1px solid #e5eaec', borderRadius: 6 }}>
+        <div style={{ marginBottom: 10 }}>
+          <span className="uth-section-label">DAILY TREND · 18–24 OCTOBER 2026</span>
+          <h3 id="donation-chart-title" style={{ margin: '5px 0 0', color: '#2b4351', font: '700 13px/1.3 Manrope, sans-serif' }}>Verified successful donations by date</h3>
+        </div>
+        <svg viewBox="0 0 720 230" role="img" aria-labelledby="donation-chart-title donation-chart-description" style={{ display: 'block', width: '100%', height: 'auto' }}>
+          <desc id="donation-chart-description">Fictional daily verified successful donations from October 18 to 24: zero, one, two, one, zero, three, and two. Total: nine.</desc>
+          {[0, 1, 2, 3].map((count) => {
+            const y = 180 - count * 40;
+            return <g key={count}>
+              <line x1="52" y1={y} x2="668" y2={y} stroke="#e9edef" strokeDasharray={count === 0 ? undefined : '4 5'} />
+              <text x="36" y={y + 4} textAnchor="end" fill="#84939a" fontSize="10">{count}</text>
+            </g>;
+          })}
+          <polyline points={chartPoints} fill="none" stroke="#43805a" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+          {dailyDonations.map((item, index) => {
+            const x = 72 + index * 96;
+            const y = 180 - item.count * 40;
+            return <g key={item.date}>
+              <circle cx={x} cy={y} r="5" fill="#fff" stroke="#43805a" strokeWidth="3" />
+              <text x={x} y="207" textAnchor="middle" fill="#687b85" fontSize="10">{item.date}</text>
+              <text x={x} y={y - 10} textAnchor="middle" fill="#2b4351" fontSize="10" fontWeight="700">{item.count}</text>
+            </g>;
+          })}
+        </svg>
+      </section>
+      <p className="uth-directory-foot"><Icon name="shield" size={15} /> A donor accepting an alert is only willing to coordinate. A successful donation is counted only after a donor completion report and authorized blood-bank or administrator verification. These sample totals are not real outcomes.</p>
+    </div>
+  </section>;
 }
 
 function NotificationsScreen({ trackingNotifications = [] }: { trackingNotifications?: { type: string; title: string; time: string; tone: string }[] }) {

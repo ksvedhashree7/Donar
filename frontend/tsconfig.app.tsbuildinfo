@@ -1,1 +1,1 @@
-{"root":["./src/app.tsx","./src/uthiramapp.tsx","./src/main.tsx","./src/vite-env.d.ts"],"version":"5.9.3"}
+{"root":["./src/app.tsx","./src/uthiramapp.tsx","./src/auth-client.ts","./src/main.tsx","./src/vite-env.d.ts","./src/components/donationjourneypanel.tsx","./src/components/googlemaptracker.tsx","./src/components/trackdonorsection.tsx","./src/services/trackingapi.ts"],"version":"5.9.3"}
