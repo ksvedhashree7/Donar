@@ -9,6 +9,7 @@ from app.middleware.audit import AuditMiddleware
 from app.routers.auth import limiter
 from app.routers.auth import router as auth_router
 from app.routers.blood import router as blood_router
+from app.routers.blood_tracking import router as blood_tracking_router
 
 settings = get_settings()
 
@@ -29,6 +30,7 @@ app.add_middleware(
 app.add_middleware(AuditMiddleware)
 app.include_router(auth_router)
 app.include_router(blood_router)
+app.include_router(blood_tracking_router)
 
 
 @app.get("/health")

@@ -1,4 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import DonationJourneyPanel from './components/DonationJourneyPanel';
+import TrackDonorSection from './components/TrackDonorSection';
 
 type Role = 'Admin' | 'Blood Bank' | 'Donor';
 type AccountMode = 'login' | 'register';
@@ -202,6 +204,11 @@ export default function UthiramApp() {
   const [requestForm, setRequestForm] = useState({ facility: '', locality: '', blood: 'O+', component: 'RED_CELLS', quantity: '3', requiredBy: '' });
   const [requestDetails, setRequestDetails] = useState({ facility: 'ABC Hospital', locality: 'Adyar, Chennai', blood: 'O+' });
   const [donorSubmittedRequest, setDonorSubmittedRequest] = useState<SubmittedBloodRequest | null>(null);
+  const [donorSharingActive, setDonorSharingActive] = useState(false);
+  const [donorArrived, setDonorArrived] = useState(false);
+  const [trackingNotifications, setTrackingNotifications] = useState<
+    { type: string; title: string; time: string; tone: string }[]
+  >([]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -291,9 +298,39 @@ export default function UthiramApp() {
     setDonors((previous) => previous.map((donor) => donor.id === responseDonorId ? { ...donor, status } : donor));
     setConfirmAccept(false);
     setConfirmDonorId(null);
-    setToast(status === 'Accepted'
-      ? 'Response recorded. The hospital will confirm next steps.'
-      : 'Thank you for responding. No further alerts will be sent for this request.');
+    if (status === 'Accepted') {
+      setTrackingNotifications((prev) => [
+        { type: 'Live Tracking', title: `Donor accepted request ${requestId}. Active donation journey panel initialized.`, time: 'Just now', tone: 'green' },
+        ...prev,
+      ]);
+      setToast('Response recorded. Active donation journey initialized with live tracking.');
+    } else {
+      setToast('Thank you for responding. No further alerts will be sent for this request.');
+    }
+  }
+
+  function handleTrackingStatusChange(statusMsg: string, toastMsg: string) {
+    setToast(toastMsg);
+    if (statusMsg.includes('active') || statusMsg.includes('sharing')) {
+      setDonorSharingActive(true);
+      setTrackingNotifications((prev) => [
+        { type: 'Live Tracking', title: `Donor started live location sharing for ${requestId}`, time: 'Just now', tone: 'green' },
+        ...prev,
+      ]);
+    } else if (statusMsg.includes('paused') || statusMsg.includes('stopped')) {
+      setDonorSharingActive(false);
+      setTrackingNotifications((prev) => [
+        { type: 'Live Tracking', title: `Donor paused live tracking for ${requestId}`, time: 'Just now', tone: 'orange' },
+        ...prev,
+      ]);
+    } else if (statusMsg.includes('arrived')) {
+      setDonorArrived(true);
+      setDonorSharingActive(false);
+      setTrackingNotifications((prev) => [
+        { type: 'Live Tracking', title: `Donor arrived at ${requestDetails.facility} for ${requestId}!`, time: 'Just now', tone: 'green' },
+        ...prev,
+      ]);
+    }
   }
 
   function simulateRequest() {
@@ -456,7 +493,32 @@ export default function UthiramApp() {
             </section>}
 
             {role === 'Blood Bank' && <BloodGroupAvailability />}
-            {role === 'Donor' ? <DonorHome donors={donors} stage={stage} requestActive={requestActive} secondsLeft={secondsLeft} notificationsPaused={notificationsPaused} compatibility={rbcCompatibility} setNotificationsPaused={setNotificationsPaused} setConfirmAccept={setConfirmAccept} respondToAlert={respondToAlert} onCompatibility={() => setScreen('Compatibility')} /> : <>
+            {role === 'Donor' ? (
+              <DonorHome
+                donors={donors}
+                stage={stage}
+                requestActive={requestActive}
+                secondsLeft={secondsLeft}
+                notificationsPaused={notificationsPaused}
+                compatibility={rbcCompatibility}
+                setNotificationsPaused={setNotificationsPaused}
+                setConfirmAccept={setConfirmAccept}
+                respondToAlert={respondToAlert}
+                onCompatibility={() => setScreen('Compatibility')}
+                onTrackingStatusChange={handleTrackingStatusChange}
+                onDonorArrived={() => setDonorArrived(true)}
+              />
+            ) : <>
+              {accepted > 0 && (
+                <TrackDonorSection
+                  requestId={requestId}
+                  facility={requestDetails.facility}
+                  locality={requestDetails.locality}
+                  isDonorSharing={donorSharingActive}
+                  donorArrived={donorArrived}
+                  contactShared={true}
+                />
+              )}
               <div className="uth-main-grid">
                 <section className="uth-panel uth-requests-panel">
                   <div className="uth-panel-head"><div><span className="uth-section-label">COORDINATOR WORKLIST</span><h2>Requests needing action <span className="uth-count">03</span></h2><p>Prioritised by urgency and time remaining</p></div><button className="uth-link-button" type="button" onClick={() => setScreen('Requests')}>View all <Icon name="arrow" size={15} /></button></div>
@@ -469,14 +531,52 @@ export default function UthiramApp() {
             </>}
           </>}
 
-          {screen === 'Requests' && role === 'Donor' && <DonorRequests donors={donors} stage={stage} requestActive={requestActive} secondsLeft={secondsLeft} notificationsPaused={notificationsPaused} submittedRequest={donorSubmittedRequest} onCreateRequest={() => setShowRequestForm(true)} setConfirmAccept={setConfirmAccept} respondToAlert={respondToAlert} />}
+          {screen === 'Requests' && role === 'Donor' && (
+            <DonorRequests
+              donors={donors}
+              stage={stage}
+              requestActive={requestActive}
+              secondsLeft={secondsLeft}
+              notificationsPaused={notificationsPaused}
+              submittedRequest={donorSubmittedRequest}
+              onCreateRequest={() => setShowRequestForm(true)}
+              setConfirmAccept={setConfirmAccept}
+              respondToAlert={respondToAlert}
+              onTrackingStatusChange={handleTrackingStatusChange}
+              onDonorArrived={() => setDonorArrived(true)}
+            />
+          )}
           {screen === 'Requests' && role === 'Blood Bank' && <div className="uth-bank-requests">
+            {accepted > 0 && (
+              <TrackDonorSection
+                requestId={requestId}
+                facility={requestDetails.facility}
+                locality={requestDetails.locality}
+                isDonorSharing={donorSharingActive}
+                donorArrived={donorArrived}
+                contactShared={true}
+              />
+            )}
             {donorSubmittedRequest && <DonorRequestReview request={donorSubmittedRequest} onDecision={reviewDonorRequest} />}
             <RequestQueue rows={requestRows} acknowledgedRequests={acknowledgedRequests} canAcknowledge={requestStatus !== 'Pending verification'} onAcknowledge={acknowledgeRequest} onCreate={() => setShowRequestForm(true)} />
           </div>}
-          {screen === 'Outreach' && role === 'Blood Bank' && <OutreachScreen stage={stage} secondsLeft={secondsLeft} donors={donors} accepted={accepted} declined={declined} noResponse={noResponse} remaining={remaining} required={required} active={requestActive} onAdvance={advanceRadius} onStop={() => stopOutreach('Outreach stopped by coordinator.')} onFulfil={markFulfilled} />}
+          {screen === 'Outreach' && role === 'Blood Bank' && (
+            <>
+              {accepted > 0 && (
+                <TrackDonorSection
+                  requestId={requestId}
+                  facility={requestDetails.facility}
+                  locality={requestDetails.locality}
+                  isDonorSharing={donorSharingActive}
+                  donorArrived={donorArrived}
+                  contactShared={true}
+                />
+              )}
+              <OutreachScreen stage={stage} secondsLeft={secondsLeft} donors={donors} accepted={accepted} declined={declined} noResponse={noResponse} remaining={remaining} required={required} active={requestActive} onAdvance={advanceRadius} onStop={() => stopOutreach('Outreach stopped by coordinator.')} onFulfil={markFulfilled} />
+            </>
+          )}
           {screen === 'Donors' && role === 'Admin' && <DonorDirectory donors={donors} />}
-          {screen === 'Notifications' && role === 'Donor' && <NotificationsScreen />}
+          {screen === 'Notifications' && role === 'Donor' && <NotificationsScreen trackingNotifications={trackingNotifications} />}
           {screen === 'Compatibility' && role === 'Donor' && <RbcCompatibilityPage compatibility={rbcCompatibility} error={compatibilityError} />}
 
           <footer className="uth-footer"><span>UTHIRAM <i>·</i> Community response prototype</span><span><Icon name="shield" size={13} /> Fictional demo data · No clinical decisions</span></footer>
@@ -498,27 +598,135 @@ function OutreachCard({ stage, accepted, declined, noResponse, remaining, requir
   return <section className="uth-panel uth-outreach-card"><div className="uth-panel-head"><div><span className="uth-section-label">RADIUS OUTREACH</span><h2>Emergency response</h2></div><Status tone={active ? 'red' : 'green'}>{active ? 'Live' : 'Stopped'}</Status></div><div className="uth-gauge-row"><div className="uth-gauge" style={{ '--gauge-progress': `${progress}%` } as React.CSSProperties}><div><strong>{accepted}<small>/{required}</small></strong><span>accepted</span></div></div><div className="uth-gauge-copy"><strong>{active ? `${remaining} more needed` : accepted >= required ? 'Support coordinated' : 'Outreach ended'}</strong><span>Willing responses</span><small><Icon name="clock" size={13} /> {active ? `${formatTime(secondsLeft)} in this radius` : 'No queued alerts'}</small></div></div><div className="uth-response-counts"><span><i className="dot-green" /> Accepted <b>{accepted}</b></span><span><i className="dot-red" /> Declined <b>{declined}</b></span><span><i className="dot-gray" /> No response <b>{noResponse}</b></span></div><div className="uth-radius-mini">{stageRanges.map((item, index) => <div className={`uth-radius-step ${index < stage ? 'completed' : index === stage && active ? 'current' : ''}`} key={item.range}><span className="uth-step-mark">{index < stage ? '✓' : index + 1}</span><span>{item.range}</span></div>)}</div><div className="uth-outreach-card-actions"><button className="uth-link-button" type="button" onClick={onOpen}>View outreach <Icon name="arrow" size={15} /></button>{active && <button className="uth-small-advance" type="button" onClick={onAdvance}>Advance demo stage</button>}</div></section>;
 }
 
-function DonorHome({ donors, stage, requestActive, secondsLeft, notificationsPaused, compatibility, setNotificationsPaused, setConfirmAccept, respondToAlert, onCompatibility }: { donors: DonorAlert[]; stage: number; requestActive: boolean; secondsLeft: number; notificationsPaused: boolean; compatibility: RbcCompatibilityMap | null; setNotificationsPaused: (value: boolean) => void; setConfirmAccept: (value: boolean) => void; respondToAlert: (id: string, status: 'Accepted' | 'Declined') => void; onCompatibility: () => void }) {
+function DonorHome({
+  donors,
+  stage,
+  requestActive,
+  secondsLeft,
+  notificationsPaused,
+  compatibility,
+  setNotificationsPaused,
+  setConfirmAccept,
+  respondToAlert,
+  onCompatibility,
+  onTrackingStatusChange,
+  onDonorArrived,
+}: {
+  donors: DonorAlert[];
+  stage: number;
+  requestActive: boolean;
+  secondsLeft: number;
+  notificationsPaused: boolean;
+  compatibility: RbcCompatibilityMap | null;
+  setNotificationsPaused: (value: boolean) => void;
+  setConfirmAccept: (value: boolean) => void;
+  respondToAlert: (id: string, status: 'Accepted' | 'Declined') => void;
+  onCompatibility: () => void;
+  onTrackingStatusChange?: (status: string, toast: string) => void;
+  onDonorArrived?: () => void;
+}) {
   const alert = donors.find((donor) => donor.stage === stage && donor.status === 'Waiting');
+  const acceptedDonor = donors.find((donor) => donor.status === 'Accepted');
   const potentialRecipients = compatibility ? donorRbcRecipientGroups('O+', compatibility) : [];
-  return <div className="uth-donor-home-grid"><section className="uth-panel uth-donor-status-panel"><div className="uth-panel-head"><div><span className="uth-section-label">YOUR DONOR PROFILE</span><h2>Availability & consent</h2></div><button className={`uth-toggle ${notificationsPaused ? '' : 'toggle-on'}`} type="button" role="switch" aria-checked={!notificationsPaused} onClick={() => setNotificationsPaused(!notificationsPaused)}><span /></button></div><div className="uth-blood-profile"><span>O+</span><div><strong>Fictional demo group · verification simulated</strong><small>{compatibility ? `Potential red-cell recipient groups: ${potentialRecipients.join(', ')}` : 'Potential recipient groups are unavailable until compatibility rules load.'}</small></div></div><button className="uth-link-button uth-compatibility-link" type="button" onClick={onCompatibility}>View blood group compatibility table <Icon name="arrow" size={15} /></button><div className="uth-donor-setting"><span>Availability</span><Status tone={notificationsPaused ? 'orange' : 'green'}>{notificationsPaused ? 'Paused' : 'Available'}</Status></div><div className="uth-donor-setting"><span>Emergency alerts</span><Status tone={notificationsPaused ? 'orange' : 'green'}>{notificationsPaused ? 'Paused' : 'On'}</Status></div><div className="uth-donor-setting"><span>Blood bank screening</span><Status tone="neutral">Simulated in demo</Status></div><div className="uth-donor-setting"><span>Contact sharing preference</span><Status tone="neutral">Per-request consent</Status></div><div className="uth-donor-setting"><span>Last availability confirmation</span><small>12 minutes ago</small></div><p className="uth-private-note"><Icon name="shield" size={15} /> Your phone number and exact address are never shown in public donor lists.</p></section>{requestActive && alert && !notificationsPaused ? <DonorAlertCard alert={alert} secondsLeft={secondsLeft} setConfirmAccept={setConfirmAccept} respondToAlert={respondToAlert} /> : <section className="uth-panel uth-no-alert"><span className="uth-no-alert-icon"><Icon name="check" size={21} /></span><h2>{notificationsPaused ? 'Notifications are paused' : 'No active alert for you'}</h2><p>{notificationsPaused ? 'You can resume emergency alerts whenever you are ready.' : 'We’ll only notify you when a verified request matches your preferences.'}</p><button className="uth-button uth-button-secondary" type="button" onClick={() => setNotificationsPaused(!notificationsPaused)}>{notificationsPaused ? 'Resume notifications' : 'Review notification settings'}</button></section>}{alert && <section className="uth-panel uth-participation"><div className="uth-panel-head"><div><span className="uth-section-label">PARTICIPATION</span><h2>Recent request activity</h2></div></div><div className="uth-activity-row"><span className="uth-activity-icon"><Icon name="drop" size={16} /></span><div><strong>Emergency request near Adyar</strong><small>Response window · {formatTime(secondsLeft)} remaining</small></div><Status tone="orange">Awaiting response</Status></div><div className="uth-activity-row"><span className="uth-activity-icon muted"><Icon name="check" size={16} /></span><div><strong>Availability confirmed</strong><small>Today · 12 min ago</small></div><Status tone="green">Recorded</Status></div></section>}</div>;
+  return (
+    <div className="uth-donor-home-container">
+      {acceptedDonor && (
+        <DonationJourneyPanel
+          requestId="UTH-1024"
+          bloodGroup={acceptedDonor.blood}
+          facility="ABC Hospital"
+          locality="Adyar, Chennai"
+          onStatusChange={onTrackingStatusChange}
+          onArrived={onDonorArrived}
+        />
+      )}
+      <div className="uth-donor-home-grid">
+        <section className="uth-panel uth-donor-status-panel">
+          <div className="uth-panel-head"><div><span className="uth-section-label">YOUR DONOR PROFILE</span><h2>Availability & consent</h2></div><button className={`uth-toggle ${notificationsPaused ? '' : 'toggle-on'}`} type="button" role="switch" aria-checked={!notificationsPaused} onClick={() => setNotificationsPaused(!notificationsPaused)}><span /></button></div>
+          <div className="uth-blood-profile"><span>O+</span><div><strong>Fictional demo group · verification simulated</strong><small>{compatibility ? `Potential red-cell recipient groups: ${potentialRecipients.join(', ')}` : 'Potential recipient groups are unavailable until compatibility rules load.'}</small></div></div>
+          <button className="uth-link-button uth-compatibility-link" type="button" onClick={onCompatibility}>View blood group compatibility table <Icon name="arrow" size={15} /></button>
+          <div className="uth-donor-setting"><span>Availability</span><Status tone={notificationsPaused ? 'orange' : 'green'}>{notificationsPaused ? 'Paused' : 'Available'}</Status></div>
+          <div className="uth-donor-setting"><span>Emergency alerts</span><Status tone={notificationsPaused ? 'orange' : 'green'}>{notificationsPaused ? 'Paused' : 'On'}</Status></div>
+          <div className="uth-donor-setting"><span>Blood bank screening</span><Status tone="neutral">Simulated in demo</Status></div>
+          <div className="uth-donor-setting"><span>Contact sharing preference</span><Status tone="neutral">Per-request consent</Status></div>
+          <div className="uth-donor-setting"><span>Last availability confirmation</span><small>12 minutes ago</small></div>
+          <p className="uth-private-note"><Icon name="shield" size={15} /> Your phone number and exact address are never shown in public donor lists.</p>
+        </section>
+        {requestActive && alert && !notificationsPaused ? (
+          <DonorAlertCard alert={alert} secondsLeft={secondsLeft} setConfirmAccept={setConfirmAccept} respondToAlert={respondToAlert} />
+        ) : (
+          <section className="uth-panel uth-no-alert">
+            <span className="uth-no-alert-icon"><Icon name="check" size={21} /></span>
+            <h2>{notificationsPaused ? 'Notifications are paused' : 'No active alert for you'}</h2>
+            <p>{notificationsPaused ? 'You can resume emergency alerts whenever you are ready.' : 'We’ll only notify you when a verified request matches your preferences.'}</p>
+            <button className="uth-button uth-button-secondary" type="button" onClick={() => setNotificationsPaused(!notificationsPaused)}>
+              {notificationsPaused ? 'Resume notifications' : 'Review notification settings'}
+            </button>
+          </section>
+        )}
+        {alert && (
+          <section className="uth-panel uth-participation">
+            <div className="uth-panel-head"><div><span className="uth-section-label">PARTICIPATION</span><h2>Recent request activity</h2></div></div>
+            <div className="uth-activity-row"><span className="uth-activity-icon"><Icon name="drop" size={16} /></span><div><strong>Emergency request near Adyar</strong><small>Response window · {formatTime(secondsLeft)} remaining</small></div><Status tone="orange">Awaiting response</Status></div>
+            <div className="uth-activity-row"><span className="uth-activity-icon muted"><Icon name="check" size={16} /></span><div><strong>Availability confirmed</strong><small>Today · 12 min ago</small></div><Status tone="green">Recorded</Status></div>
+          </section>
+        )}
+      </div>
+    </div>
+  );
 }
 
-function DonorRequests({ donors, stage, requestActive, secondsLeft, notificationsPaused, submittedRequest, onCreateRequest, setConfirmAccept, respondToAlert }: { donors: DonorAlert[]; stage: number; requestActive: boolean; secondsLeft: number; notificationsPaused: boolean; submittedRequest: SubmittedBloodRequest | null; onCreateRequest: () => void; setConfirmAccept: (value: boolean) => void; respondToAlert: (id: string, status: 'Accepted' | 'Declined') => void }) {
+function DonorRequests({
+  donors,
+  stage,
+  requestActive,
+  secondsLeft,
+  notificationsPaused,
+  submittedRequest,
+  onCreateRequest,
+  setConfirmAccept,
+  respondToAlert,
+  onTrackingStatusChange,
+  onDonorArrived,
+}: {
+  donors: DonorAlert[];
+  stage: number;
+  requestActive: boolean;
+  secondsLeft: number;
+  notificationsPaused: boolean;
+  submittedRequest: SubmittedBloodRequest | null;
+  onCreateRequest: () => void;
+  setConfirmAccept: (value: boolean) => void;
+  respondToAlert: (id: string, status: 'Accepted' | 'Declined') => void;
+  onTrackingStatusChange?: (status: string, toast: string) => void;
+  onDonorArrived?: () => void;
+}) {
   const openAlert = donors.find((donor) => donor.stage === stage && donor.status === 'Waiting');
+  const acceptedDonor = donors.find((donor) => donor.status === 'Accepted');
 
-  return <div className="uth-donor-requests">
-    <section className="uth-panel uth-full-panel">
-      <div className="uth-panel-head">
-        <div><span className="uth-section-label">YOUR BLOOD REQUESTS</span><h2>{submittedRequest ? `Request ${submittedRequest.id}` : 'Need blood support?'}</h2><p>{!submittedRequest
-          ? 'Submit a blood request for blood bank review.'
-          : submittedRequest.status.startsWith('Declined')
-            ? 'The blood bank declined this request.'
-            : submittedRequest.status.startsWith('Accepted')
-              ? 'The blood bank accepted this request for coordination; administrator verification is still required.'
-              : 'Your request is awaiting blood bank review.'}</p></div>
-        <button className="uth-button uth-button-primary" type="button" onClick={onCreateRequest}>Request blood</button>
-      </div>
+  return (
+    <div className="uth-donor-requests">
+      {acceptedDonor && (
+        <DonationJourneyPanel
+          requestId="UTH-1024"
+          bloodGroup={acceptedDonor.blood}
+          facility="ABC Hospital"
+          locality="Adyar, Chennai"
+          onStatusChange={onTrackingStatusChange}
+          onArrived={onDonorArrived}
+        />
+      )}
+      <section className="uth-panel uth-full-panel">
+        <div className="uth-panel-head">
+          <div><span className="uth-section-label">YOUR BLOOD REQUESTS</span><h2>{submittedRequest ? `Request ${submittedRequest.id}` : 'Need blood support?'}</h2><p>{!submittedRequest
+            ? 'Submit a blood request for blood bank review.'
+            : submittedRequest.status.startsWith('Declined')
+              ? 'The blood bank declined this request.'
+              : submittedRequest.status.startsWith('Accepted')
+                ? 'The blood bank accepted this request for coordination; administrator verification is still required.'
+                : 'Your request is awaiting blood bank review.'}</p></div>
+          <button className="uth-button uth-button-primary" type="button" onClick={onCreateRequest}>Request blood</button>
+        </div>
       {submittedRequest ? <div className="uth-submitted-request">
         <div><span>Blood group</span><strong>{submittedRequest.blood}</strong></div>
         <div><span>Hospital / facility</span><strong>{submittedRequest.facility}</strong></div>
@@ -538,7 +746,8 @@ function DonorRequests({ donors, stage, requestActive, secondsLeft, notification
         ? <div className="uth-donor-alert-slot"><DonorAlertCard alert={openAlert} secondsLeft={secondsLeft} setConfirmAccept={setConfirmAccept} respondToAlert={respondToAlert} /></div>
         : <p className="uth-donor-request-empty">{notificationsPaused ? 'Resume notifications when you are ready.' : 'No active alert needs a response.'}</p>}
     </section>
-  </div>;
+  </div>
+  );
 }
 
 function RbcCompatibilityPage({ compatibility, error }: { compatibility: RbcCompatibilityMap | null; error: string }) {
@@ -640,7 +849,13 @@ function DonorDirectory({ donors }: { donors: DonorAlert[] }) {
   return <section className="uth-panel uth-full-panel"><div className="uth-panel-head"><div><span className="uth-section-label">DONOR & BLOOD BANK DONOR LISTS</span><h2>Donor data</h2><p>Fictional donor records for administrator and blood-bank coordination. No contact details.</p></div></div><div className="uth-donor-directory">{donors.map((donor) => <article className="uth-directory-card" key={donor.id}><span className="uth-avatar donor-initials">{donor.initials}</span><div><strong>{donor.id}</strong><small>{donor.blood} · {donor.locality}</small></div><Status tone={donor.status === 'Accepted' ? 'green' : donor.status === 'Declined' ? 'orange' : 'blue'}>{donor.status === 'Waiting' ? 'Contactable' : donor.status}</Status><span className="uth-directory-distance">{donor.distance} km approx.</span></article>)}</div><p className="uth-directory-foot"><Icon name="shield" size={15} /> Approximate locality only. Donor responses are willingness to coordinate, not medical approval.</p></section>;
 }
 
-function NotificationsScreen() {
-  const notifications = [{ type: 'Emergency', title: 'Emergency request near you · O+ required', time: 'Just now', tone: 'red' }, { type: 'Request updates', title: 'Request UTH-1024 has been verified', time: '2 min ago', tone: 'green' }, { type: 'Availability', title: 'Please confirm your donor availability', time: 'Yesterday', tone: 'orange' }, { type: 'Request updates', title: 'Request UTH-1017 has been fulfilled', time: 'Yesterday', tone: 'green' }];
+function NotificationsScreen({ trackingNotifications = [] }: { trackingNotifications?: { type: string; title: string; time: string; tone: string }[] }) {
+  const baseNotifications = [
+    { type: 'Emergency', title: 'Emergency request near you · O+ required', time: 'Just now', tone: 'red' },
+    { type: 'Request updates', title: 'Request UTH-1024 has been verified', time: '2 min ago', tone: 'green' },
+    { type: 'Availability', title: 'Please confirm your donor availability', time: 'Yesterday', tone: 'orange' },
+    { type: 'Request updates', title: 'Request UTH-1017 has been fulfilled', time: 'Yesterday', tone: 'green' },
+  ];
+  const notifications = [...trackingNotifications, ...baseNotifications];
   return <section className="uth-panel uth-full-panel"><div className="uth-panel-head"><div><span className="uth-section-label">YOUR INBOX</span><h2>Notifications</h2><p>Request updates and consent-based emergency messages</p></div><button className="uth-link-button" type="button">Mark all read</button></div><div className="uth-notification-list">{notifications.map((item) => <article className="uth-notification-item" key={item.title}><span className={`uth-notification-icon notice-${item.tone}`}><Icon name={item.type === 'Emergency' ? 'alert' : item.type === 'Availability' ? 'clock' : 'check'} size={17} /></span><div><span className="uth-notification-category">{item.type}</span><strong>{item.title}</strong><small>{item.time} · Demo notification</small></div><button type="button" className="uth-notice-dismiss" aria-label="Dismiss notification"><Icon name="close" size={15} /></button></article>)}</div></section>;
 }

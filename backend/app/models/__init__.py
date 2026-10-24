@@ -14,6 +14,10 @@ from app.models.blood import (
     BloodRequestStatusHistory,
     BloodRequestVerification,
 )
+from app.models.blood_tracking import (
+    BloodDonorTrackingSession,
+    BloodTrackingNotification,
+)
 from app.models.phase1 import (
     AccessGrant,
     Appointment,
@@ -59,6 +63,7 @@ __all__ = [
     "BloodDonationRecord",
     "BloodDonorMatch",
     "BloodDonorProfile",
+    "BloodDonorTrackingSession",
     "BloodNotification",
     "BloodNotificationResponse",
     "BloodOrganisation",
@@ -67,6 +72,7 @@ __all__ = [
     "BloodRequestReservation",
     "BloodRequestStatusHistory",
     "BloodRequestVerification",
+    "BloodTrackingNotification",
     "AccessGrant",
     "Appointment",
     "AuditLog",
